@@ -166,4 +166,6 @@ FastAPI · nanobot · SQLite 用户/会话 · JWT 鉴权 · 可选 MCP / Chroma 
 
 ## 许可
 
-使用前请自行补充 LICENSE；商用请注意各模型 API 与依赖库许可。
+本项目采用 [MIT License](LICENSE)。
+
+使用各 AI 模型 API（如 DeepSeek）及第三方依赖时，请遵守其各自的服务条款与许可。
