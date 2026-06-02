@@ -28,7 +28,7 @@ document.getElementById('splitInput').addEventListener('input', function() {
 // ===== Plan-and-Execute 模式 =====
 async function loadAgentMode() {
   try {
-    var res = await fetch('/chat/mode?session_id=' + sessionId);
+    var res = await kejiFetch('/chat/mode?session_id=' + sessionId);
     var data = await res.json();
     if (data.session_id) sessionId = data.session_id;
     agentMode = data.mode || 'react';
@@ -42,7 +42,7 @@ async function setAgentMode(mode) {
   agentMode = mode;
   localStorage.setItem('keji_agent_mode', mode);
   try {
-    await fetch('/chat/mode', {
+    await kejiFetch('/chat/mode', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({session_id: sessionId, mode: mode})
     });

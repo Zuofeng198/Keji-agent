@@ -1,5 +1,6 @@
 """Tool registry for dynamic tool management."""
 
+import time
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
@@ -102,16 +103,41 @@ class ToolRegistry:
         _HINT = "\n\n[Analyze the error above and try a different approach.]"
         tool, params, error = self.prepare_call(name, params)
         if error:
+            try:
+                from core.security.audit import audit_tool_call
+                audit_tool_call(name, params, status="error", error=error[:500])
+            except Exception:
+                pass
             return error + _HINT
 
+        t0 = time.perf_counter()
         try:
             assert tool is not None  # guarded by prepare_call()
             result = await tool.execute(**params)
-            if isinstance(result, str) and result.startswith("Error"):
-                return result + _HINT
+            duration_ms = int((time.perf_counter() - t0) * 1000)
+            preview = str(result)[:300] if result is not None else ""
+            status = "error" if isinstance(result, str) and result.startswith("Error") else "ok"
+            try:
+                from core.security.audit import audit_tool_call
+                audit_tool_call(
+                    name, params, status=status, duration_ms=duration_ms,
+                    result_preview=preview,
+                    error=preview if status == "error" else "",
+                )
+            except Exception:
+                pass
+            if status == "error":
+                return str(result) + _HINT
             return result
         except Exception as e:
-            return f"Error executing {name}: {str(e)}" + _HINT
+            duration_ms = int((time.perf_counter() - t0) * 1000)
+            err = f"Error executing {name}: {str(e)}"
+            try:
+                from core.security.audit import audit_tool_call
+                audit_tool_call(name, params, status="error", duration_ms=duration_ms, error=err)
+            except Exception:
+                pass
+            return err + _HINT
 
     @property
     def tool_names(self) -> list[str]:

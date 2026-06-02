@@ -157,6 +157,23 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS idx_tool_usage_session ON tool_usage_log(session_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_tool_usage_name ON tool_usage_log(tool_name);
+
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                actor TEXT NOT NULL DEFAULT 'api',
+                session_id TEXT NOT NULL DEFAULT '',
+                tool_name TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL DEFAULT '',
+                action TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'ok',
+                detail TEXT NOT NULL DEFAULT '',
+                client_ip TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(created_at);
+            CREATE INDEX IF NOT EXISTS idx_audit_type ON audit_events(event_type, created_at);
+            CREATE INDEX IF NOT EXISTS idx_audit_path ON audit_events(path);
         """)
         conn.commit()
 
@@ -572,3 +589,56 @@ class Database:
             (session_id,),
         ).fetchone()
         return dict(row) if row else {"calls": 0, "cost": 0.0, "prompt": 0, "completion": 0}
+
+    # ═══════════════════════════════════════════════════════
+    # 审计日志
+    # ═══════════════════════════════════════════════════════
+
+    def log_audit_event(
+        self,
+        event_type: str,
+        actor: str = "api",
+        session_id: str = "",
+        tool_name: str = "",
+        path: str = "",
+        action: str = "",
+        status: str = "ok",
+        detail: str = "",
+        client_ip: str = "",
+    ) -> None:
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT INTO audit_events
+               (event_type, actor, session_id, tool_name, path, action,
+                status, detail, client_ip, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (event_type, actor, session_id, tool_name, path, action,
+             status, detail[:2000], client_ip, time.time()),
+        )
+        conn.commit()
+
+    def list_audit_events(
+        self,
+        *,
+        event_type: str = "",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict]:
+        conn = self._get_conn()
+        sql = "SELECT * FROM audit_events WHERE 1=1"
+        params: list = []
+        if event_type:
+            sql += " AND event_type = ?"
+            params.append(event_type)
+        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = conn.execute(sql, params).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            if d.get("created_at"):
+                d["created_at"] = time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(d["created_at"])
+                )
+            result.append(d)
+        return result

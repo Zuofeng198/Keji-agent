@@ -7,13 +7,16 @@ import sys
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from core.routes import router as api_router
+from core.routes_security import router as security_router
+from core.security.auth import APIKeyMiddleware, get_security_settings
+from core.security.context import clear_request_context, set_request_context
 from core.wechat.work_bridge import router as work_router
 
 async def get_adapter():
@@ -24,6 +27,11 @@ async def get_adapter():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    sec = get_security_settings(reload=True)
+    if sec.enabled:
+        logger.info("API 鉴权已启用（本地回环可配置免密钥）")
+    else:
+        logger.warning("API 鉴权未启用：请在 config.yaml 的 security 段配置 api_key")
     adapter = await get_adapter()
     # 启动飞书桥接层（如果配置了飞书渠道）
     await adapter.start_feishu_bridge()
@@ -34,8 +42,21 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="科吉 AI 助手", docs_url=None, redoc_url=None, lifespan=lifespan)
+app.add_middleware(APIKeyMiddleware)
 app.include_router(api_router)
+app.include_router(security_router)
 app.include_router(work_router)
+
+
+@app.middleware("http")
+async def bind_request_context(request: Request, call_next):
+    """为审计日志关联客户端 IP。"""
+    client_ip = request.client.host if request.client else ""
+    set_request_context(client_ip=client_ip, actor="api")
+    try:
+        return await call_next(request)
+    finally:
+        clear_request_context()
 
 static_dir = os.path.join(os.path.dirname(__file__), "web")
 if os.path.isdir(static_dir):
@@ -89,17 +110,27 @@ def home():
 # ── 对话接口 ──
 
 @app.post("/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, request: Request):
     adapter = await get_adapter()
     sid = req.conversation_id or req.session_id or uuid.uuid4().hex[:12]
+    set_request_context(
+        session_id=sid,
+        client_ip=request.client.host if request.client else "",
+        actor="api",
+    )
     reply = await adapter.chat(query=req.query, sid=sid, files=req.files or None)
     return {"reply": reply, "session_id": sid, "conversation_id": req.conversation_id or sid}
 
 
 @app.post("/chat/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, request: Request):
     adapter = await get_adapter()
     sid = req.conversation_id or req.session_id or uuid.uuid4().hex[:12]
+    set_request_context(
+        session_id=sid,
+        client_ip=request.client.host if request.client else "",
+        actor="api",
+    )
 
     async def generate():
         async for event_str in adapter.chat_stream(query=req.query, sid=sid, files=req.files or None):

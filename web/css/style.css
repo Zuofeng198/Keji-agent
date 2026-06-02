@@ -987,6 +987,39 @@ body {
 }
 .settings-row input:focus, .settings-row select:focus { border-color: var(--primary); }
 
+.audit-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.audit-table-wrap { margin-top: 4px; }
+.audit-table-wrap .stats-table td {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: top;
+}
+.audit-table-wrap .stats-table td.audit-detail-cell {
+  max-width: 420px;
+  white-space: normal;
+  word-break: break-all;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.audit-status-ok { color: var(--success); font-weight: 600; }
+.audit-status-error { color: var(--danger); font-weight: 600; }
+.audit-type-badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--primary-subtle);
+  color: var(--primary);
+}
+
 /* ===== Toast 通知 ===== */
 .toast-container {
   position: fixed;

@@ -185,7 +185,7 @@ function refreshDebugLogs() {
   var body = document.getElementById('ddBody');
   body.innerHTML = '<div style="text-align:center;padding:20px;color:#5a6080"><div class="spinner"></div>加载日志...</div>';
 
-  fetch('/api/debug/logs?limit=100').then(function(r){return r.json()}).then(function(d){
+  kejiFetch('/api/debug/logs?limit=100').then(function(r){return r.json()}).then(function(d){
     var logs = d.logs||[];
     if (!logs.length) { body.innerHTML = '<div class="dd-empty">暂无日志</div>'; return; }
     var html = '';

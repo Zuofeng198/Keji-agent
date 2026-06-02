@@ -17,7 +17,7 @@ async function execCommand(cmd, args) {
     case '/clear':
       showDangerConfirm('删除对话', '确定删除当前对话？此操作不可恢复！', function() {
         if (currentConvId) {
-          fetch('/api/conversations/' + currentConvId, { method: 'DELETE' }).catch(function(){});
+          kejiFetch('/api/conversations/' + currentConvId, { method: 'DELETE' }).catch(function(){});
         }
         conversationId = '';
         currentConvId = '';
@@ -42,7 +42,7 @@ async function fetchCommand(cmd, args) {
   var name = cmd.replace('/', '');
   var url = '/api/command/' + name;
   try {
-    var res = await fetch(url);
+    var res = await kejiFetch(url);
     if (!res.ok) return null;
     var data = await res.json();
     return data.text || '(无输出)';
@@ -84,7 +84,7 @@ async function handleSlashInput(msg) {
     msgs.appendChild(statusEl);
     _autoScroll(msgs);
     try {
-      var res = await fetch('/api/compact', {
+      var res = await kejiFetch('/api/compact', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sid })
@@ -112,7 +112,7 @@ async function handleSlashInput(msg) {
   // 技能命令
   if (cmd === '/skills') {
     try {
-      var res = await fetch('/api/skills');
+      var res = await kejiFetch('/api/skills');
       if (!res.ok) { await showCommandResult(msg, '获取技能列表失败'); return { handled: true }; }
       var data = await res.json();
       var skills = data.skills || [];
@@ -139,7 +139,7 @@ async function handleSlashInput(msg) {
     var sid_use = sessionId || currentConvId || conversationId;
     if (!sid_use) { await showCommandResult(msg, '请先开始一段对话'); return { handled: true }; }
     try {
-      var res = await fetch('/api/skills/activate', {
+      var res = await kejiFetch('/api/skills/activate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sid_use, skill_name: skillName })
@@ -156,7 +156,7 @@ async function handleSlashInput(msg) {
     var sid_unload = sessionId || currentConvId || conversationId;
     if (!sid_unload) { await showCommandResult(msg, '没有激活的技能'); return { handled: true }; }
     try {
-      var res = await fetch('/api/skills/deactivate', {
+      var res = await kejiFetch('/api/skills/deactivate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sid_unload })
@@ -240,7 +240,7 @@ async function onQuickCmdClick(cmd) {
     msgs.appendChild(statusEl);
     _autoScroll(msgs);
     try {
-      var res = await fetch('/api/compact', {
+      var res = await kejiFetch('/api/compact', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sid })
@@ -278,7 +278,7 @@ async function onQuickCmdSkills() {
   if (empty) empty.remove();
   addMessage('user', escHtml('/skills'));
   try {
-    var res = await fetch('/api/skills');
+    var res = await kejiFetch('/api/skills');
     if (!res.ok) { addMessage('assistant', '获取技能列表失败'); _autoScroll(msgs); return; }
     var data = await res.json();
     var skills = data.skills || [];
@@ -304,7 +304,7 @@ async function onQuickCmdUse() {
   addMessage('user', escHtml('/use'));
   // 先列出可用技能，让用户选
   try {
-    var res = await fetch('/api/skills');
+    var res = await kejiFetch('/api/skills');
     if (!res.ok) { addMessage('assistant', '获取技能列表失败'); _autoScroll(msgs); return; }
     var data = await res.json();
     var sks = data.skills || [];
@@ -326,7 +326,7 @@ async function onQuickCmdUnload() {
   var sid = sessionId || currentConvId || conversationId;
   if (!sid) { addMessage('assistant', '没有激活的技能'); _autoScroll(msgs); return; }
   try {
-    var res = await fetch('/api/skills/deactivate', {
+    var res = await kejiFetch('/api/skills/deactivate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sid })
@@ -355,7 +355,7 @@ document.addEventListener('DOMContentLoaded', renderQuickCommands);
 
 async function sendPlanExecute(q, files) {
   try {
-    var res = await fetch('/chat/plan', {
+    var res = await kejiFetch('/chat/plan', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({query: q, session_id: sessionId, conversation_id: currentConvId, files: files||[]})
     });
@@ -460,7 +460,7 @@ async function approvePlan() {
   document.getElementById('stopBtn').style.display = '';
   try {
     var q = currentPlan._queryText || document.getElementById('chatInput').value.trim() || '执行';
-    var res = await fetch('/chat/execute', {
+    var res = await kejiFetch('/chat/execute', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({plan: currentPlan, query: q, session_id: sessionId, conversation_id: currentConvId})
     });
@@ -627,6 +627,9 @@ function switchPage(page) {
   if (page === 'database') { loadDbConfigs(); loadDbConfigSelect(); }
   if (page === 'stats') { setTimeout(loadStats, 50); }
   if (page === 'tools') { setTimeout(loadToolPage, 50); }
+  if (page === 'settings') { setTimeout(function() {
+    if (typeof loadAuditLogs === 'function') loadAuditLogs();
+  }, 50); }
 }
 
 function newChat() {
@@ -668,7 +671,7 @@ function toggleSkillPreset(presetName) {
   var sid = sessionId || currentConvId || conversationId;
   if (!sid) { toast('请先开始一段对话', 'info'); return; }
 
-  fetch('/api/skills/active', {
+  kejiFetch('/api/skills/active', {
     method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({session_id: sid})
   }).then(function(r){return r.json()}).then(function(d){
@@ -693,7 +696,7 @@ function toggleSkillPreset(presetName) {
       });
     }
 
-    return fetch('/api/skills/set', {
+    return kejiFetch('/api/skills/set', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({session_id: sid, skills: newSkills})
     });
@@ -714,8 +717,8 @@ function loadSkillPanel() {
     sessionId = sid;
   }
   Promise.all([
-    fetch('/api/skills').then(function(r){return r.json()}).then(function(d){return d.skills || [];}),
-    sid ? fetch('/api/skills/active', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session_id:sid})}).then(function(r){return r.json()}).then(function(d){return d.active_skills || []}).catch(function(){return [];}) : Promise.resolve([])
+    kejiFetch('/api/skills').then(function(r){return r.json()}).then(function(d){return d.skills || [];}),
+    sid ? kejiFetch('/api/skills/active', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session_id:sid})}).then(function(r){return r.json()}).then(function(d){return d.active_skills || []}).catch(function(){return [];}) : Promise.resolve([])
   ]).then(function(results){
     var skills = results[0];
     var activeSkills = results[1] || [];
@@ -859,7 +862,7 @@ function hideSkillDesc(event, el) {
 function activateSkill(name) {
   var sid = sessionId || currentConvId || conversationId;
   if (!sid) { toast('请先开始一段对话', 'error'); return; }
-  fetch('/api/skills/activate', {
+  kejiFetch('/api/skills/activate', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({session_id: sid, skill_name: name})
@@ -872,7 +875,7 @@ function activateSkill(name) {
 function deactivateSkill(name) {
   var sid = sessionId || currentConvId || conversationId;
   if (!sid) return;
-  fetch('/api/skills/deactivate', {
+  kejiFetch('/api/skills/deactivate', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({session_id: sid, skill_name: name})
@@ -889,7 +892,7 @@ function toggleConvPanel() {
 }
 
 function loadConvList() {
-  fetch('/api/conversations').then(r => r.json()).then(d => {
+  kejiFetch('/api/conversations').then(r => r.json()).then(d => {
     const list = document.getElementById('convList');
     if (!d.conversations || d.conversations.length === 0) {
       list.innerHTML = '<div class="empty-list">暂无对话历史</div>';
@@ -905,7 +908,7 @@ function loadConvList() {
 }
 
 function loadConversation(id) {
-  fetch('/api/conversations/' + id).then(r => r.json()).then(d => {
+  kejiFetch('/api/conversations/' + id).then(r => r.json()).then(d => {
     currentConvId = id;
     conversationId = id;
     sessionId = id;  // ← 关键：让后续消息发到同一个会话
@@ -968,7 +971,7 @@ function uploadFileItem(file) {
   var formData = new FormData();
   formData.append('file', file);
 
-  fetch('/api/upload', { method: 'POST', body: formData })
+  kejiFetch('/api/upload', { method: 'POST', body: formData })
     .then(function(r) {
       if (!r.ok) throw new Error('服务器返回: ' + r.status);
       return r.json();
@@ -1073,7 +1076,7 @@ async function sendChat() {
   input.style.height = 'auto';
 
   try {
-    const res = await fetch('/chat/stream', {
+    const res = await kejiFetch('/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

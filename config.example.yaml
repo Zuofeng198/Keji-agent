@@ -1,5 +1,17 @@
-# 复制为 config.yaml 后填入真实密钥（config.yaml 已在 .gitignore 中，不会提交到 Git）
+# 复制为 config.yaml 后配置环境变量（config.yaml 已在 .gitignore 中）
 # cp config.example.yaml config.yaml
+# 参考 .env.example 设置 KEJI_API_KEY、DEEPSEEK_API_KEY 等
+
+security:
+  enabled: true
+  api_key: ${KEJI_API_KEY}
+  allow_localhost_without_auth: true
+  public_paths: []
+
+audit:
+  enabled: true
+  file: logs/audit.jsonl
+  max_param_length: 500
 
 models:
   default: deepseek
@@ -140,8 +152,8 @@ wechat:
 channels:
   feishu:
     enabled: false
-    app_id: ""
-    app_secret: ""
+    app_id: ${FEISHU_APP_ID}
+    app_secret: ${FEISHU_APP_SECRET}
     encrypt_key: ""
     verification_token: ""
     allow_from: []

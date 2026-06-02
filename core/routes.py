@@ -54,6 +54,11 @@ def index_document(req: IndexRequest):
     path = os.path.abspath(req.path)
     if not os.path.exists(path):
         raise HTTPException(404, f"路径不存在: {path}")
+    try:
+        from core.security.audit import audit_file_access
+        audit_file_access(path, "index", tool_name="api_knowledge_index")
+    except Exception:
+        pass
 
     indexer = get_indexer()
 
@@ -184,6 +189,11 @@ def list_files(
     if not path:
         path = os.path.expanduser("~\\Desktop")
     path = os.path.abspath(path)
+    try:
+        from core.security.audit import audit_file_access
+        audit_file_access(path, "list", tool_name="api_files_list")
+    except Exception:
+        pass
 
     if not os.path.exists(path):
         raise HTTPException(404, f"路径不存在: {path}")
@@ -285,6 +295,11 @@ def open_file(path: str = Query(...)):
     import subprocess
     import platform
     path = os.path.abspath(path)
+    try:
+        from core.security.audit import audit_file_access
+        audit_file_access(path, "open", tool_name="api_files_open")
+    except Exception:
+        pass
     if not os.path.exists(path):
         raise HTTPException(404, f"文件不存在: {path}")
     if os.path.isdir(path):
@@ -464,6 +479,35 @@ def _get_config_path(settings_key: str, default_provider: str) -> list[str]:
     return _common_keys.get(settings_key, [])
 
 
+# 写入 config.yaml 的前端设置项（其余进 SQLite settings 表）
+_CONFIG_KEY_MAP = frozenset({
+    "model_type",
+    "ollama_url",
+    "chat_model",
+    "openai_base_url",
+    "openai_api_key",
+    "openai_model",
+    "embed_model",
+    "chunk_size",
+    "chunk_overlap",
+    "top_k",
+})
+
+
+def _apply_model_type(config: dict, model_type: str) -> None:
+    """前端 model_type → config.models.default"""
+    models = config.setdefault("models", {})
+    if model_type == "ollama":
+        models["default"] = "ollama"
+    elif model_type == "openai":
+        if "deepseek" in models:
+            models["default"] = "deepseek"
+        elif "openai" in models:
+            models["default"] = "openai"
+        else:
+            models["default"] = "openai"
+
+
 def _set_nested(d: dict, keys: list[str], value) -> None:
     """在嵌套字典中按 key 路径设值"""
     for k in keys[:-1]:
@@ -485,12 +529,11 @@ def update_settings(req: SettingsUpdate):
     config_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 
     # 分离 Config 类设置和 DB 类设置
-    config_keys = set(_CONFIG_KEY_MAP.keys())
     config_updates = {}
     db_updates = {}
 
     for key, value in req.settings.items():
-        if key in config_keys:
+        if key in _CONFIG_KEY_MAP:
             config_updates[key] = value
         else:
             db_updates[key] = value
@@ -500,13 +543,17 @@ def update_settings(req: SettingsUpdate):
         yaml = YAML()
         yaml.preserve_quotes = True
         with open(config_path, "r", encoding="utf-8") as f:
-            config = yaml.load(f)
+            config = yaml.load(f) or {}
 
-        # 确定当前默认 provider
+        if "model_type" in config_updates:
+            mt = config_updates.pop("model_type")
+            if mt:
+                _apply_model_type(config, str(mt))
+
         default_provider = config.get("models", {}).get("default", "openai")
 
         for key, value in config_updates.items():
-            if value is not None:
+            if value is not None and value != "":
                 path = _get_config_path(key, default_provider)
                 if path:
                     _set_nested(config, path, value)
@@ -777,6 +824,11 @@ async def upload_file(file: UploadFile = File(...)):
         content = await file.read()
         with open(save_path, "wb") as f:
             f.write(content)
+        try:
+            from core.security.audit import audit_file_access
+            audit_file_access(save_path, "upload", tool_name="api_upload")
+        except Exception:
+            pass
 
         size = len(content)
         ext = os.path.splitext(original_name)[1].lower()

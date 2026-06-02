@@ -76,8 +76,8 @@ def load_system_prompt() -> str:
 
 
 def load_config() -> dict:
-    with open(_PROJECT_ROOT / "config.yaml", "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+    from core.security.secrets import load_app_config
+    return load_app_config(_PROJECT_ROOT / "config.yaml")
 
 
 def _make_provider(config: dict) -> tuple[LLMProvider, str, int]:
@@ -91,8 +91,15 @@ def _make_provider(config: dict) -> tuple[LLMProvider, str, int]:
     model = provider_cfg.get("model", "")
 
     # 解析环境变量引用 ${VAR_NAME}
-    if api_key.startswith("${") and api_key.endswith("}"):
+    if isinstance(api_key, str) and api_key.startswith("${") and api_key.endswith("}"):
         api_key = os.environ.get(api_key[2:-1], "")
+
+    if default in ("deepseek", "openai") and not (api_key or "").strip():
+        env_name = "DEEPSEEK_API_KEY" if default == "deepseek" else "OPENAI_API_KEY"
+        logger.error(
+            "未配置 {} API Key：请在 .env 设置 {}，或在设置页保存 API Key 后重启",
+            default, env_name,
+        )
 
     if not model:
         model = "gpt-4o-mini" if default == "openai" else "qwen2.5:7b"
@@ -584,7 +591,7 @@ class _LazyTool(Tool):
             return f"错误：工具 '{actual}' 不存在"
         logger.info("Lazy exec: {} args={}", actual, str(args)[:200])
         try:
-            result = await t.execute(**args)
+            result = await self._registry.execute(actual, args)
             return str(result)[:4000]
         except Exception as e:
             return f"错误: {type(e).__name__}: {str(e)[:200]}"
@@ -890,7 +897,9 @@ class KejiAdapter:
         return msgs, sid or "cli:default"
 
     async def chat(self, query: str, sid: str = "", files: list[str] | None = None) -> str:
+        from core.security.context import set_request_context
         msgs, sk = self._build_msgs(query, sid, files)
+        set_request_context(session_id=sk, actor="api")
         runner = AgentRunner(self.provider)
         agent_cfg = self.config.get("agent", {})
         cost_cb = self._make_cost_callback(sk)
@@ -928,7 +937,9 @@ class KejiAdapter:
         return reply
 
     async def chat_stream(self, query: str, sid: str = "", files: list[str] | None = None) -> AsyncGenerator[str, None]:
+        from core.security.context import set_request_context
         msgs, sk = self._build_msgs(query, sid, files)
+        set_request_context(session_id=sk, actor="api")
         q: asyncio.Queue[str] = asyncio.Queue()
         done = asyncio.Event()
         sse_hook = SSEHook(q)

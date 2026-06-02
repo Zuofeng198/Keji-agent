@@ -10,6 +10,46 @@ let currentReader = null;
 let debugEvents = [];        // 调试事件缓冲
 let debugActiveTab = 'events';
 
+// ── API 鉴权（与后端 security.api_key 一致）──
+function getKejiApiKey() {
+  return localStorage.getItem('keji_api_key') || '';
+}
+function setKejiApiKey(key) {
+  if (key) localStorage.setItem('keji_api_key', key);
+  else localStorage.removeItem('keji_api_key');
+}
+function kejiAuthHeaders(extra) {
+  var h = {};
+  if (extra) {
+    if (extra instanceof Headers) {
+      extra.forEach(function(v, k) { h[k] = v; });
+    } else if (typeof extra === 'object') {
+      Object.assign(h, extra);
+    }
+  }
+  var key = getKejiApiKey();
+  if (key) {
+    h['Authorization'] = 'Bearer ' + key;
+    h['X-API-Key'] = key;
+  }
+  return h;
+}
+function kejiFetch(url, options) {
+  options = options || {};
+  var headers = kejiAuthHeaders(options.headers);
+  return fetch(url, Object.assign({}, options, { headers: headers })).then(function(res) {
+    if (res.status === 401 && !window._kejiAuthPrompted) {
+      window._kejiAuthPrompted = true;
+      var k = prompt('需要 API Key 才能访问科吉。请在设置中填写，或现在输入：', getKejiApiKey());
+      if (k) {
+        setKejiApiKey(k.trim());
+        window._kejiAuthPrompted = false;
+        return kejiFetch(url, options);
+      }
+    }
+    return res;
+  });
+}
 
 let agentMode = localStorage.getItem('keji_agent_mode') || 'react';
 let currentPlan = null;
@@ -120,8 +160,8 @@ var _catColors = {
 // 加载并分组渲染工具
 function loadTools() {
   Promise.all([
-    fetch('/tools').then(function(r){return r.json()}),
-    fetch('/api/tools/display').then(function(r){return r.json()})
+    kejiFetch('/tools').then(function(r){return r.json()}),
+    kejiFetch('/api/tools/display').then(function(r){return r.json()})
   ]).then(function(data) {
     var toolsData = data[0];
     var displayData = data[1];
@@ -184,7 +224,7 @@ function toggleToolPanel() {
 }
 
 function checkStatus() {
-  fetch('/api/status').then(r => r.json()).then(d => {
+  kejiFetch('/api/status').then(r => r.json()).then(d => {
     const dot = document.getElementById('statusDot');
     const text = document.getElementById('statusText');
     if (d.model) {

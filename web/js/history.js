@@ -13,7 +13,7 @@ function loadHistory() {
   var list = document.getElementById('historyList');
   if (!list) return;
   list.innerHTML = '<div style="text-align:center;padding:20px;color:#999">加载中...</div>';
-  fetch('/api/conversations').then(function(r){return r.json()}).then(function(d){
+  kejiFetch('/api/conversations').then(function(r){return r.json()}).then(function(d){
     var arr = d.conversations||[];
     if (!arr.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:#999">暂无对话</div>'; return; }
     list.innerHTML = arr.map(function(c){
@@ -25,7 +25,7 @@ function loadHistory() {
 }
 function loadConv(convId) {
   closeHistory();
-  fetch('/api/conversations/'+convId).then(function(r){return r.json()}).then(function(d){
+  kejiFetch('/api/conversations/'+convId).then(function(r){return r.json()}).then(function(d){
     var el = document.getElementById('chatMessages');
     if (!el) return;
     currentConvId = convId;
@@ -71,7 +71,7 @@ function showCtx(e, convId) {
 function closeCtx() { var m=document.getElementById('ctxMenu'); if(m)m.classList.remove('open'); }
 function delConv(id) {
   showDangerConfirm('删除对话', '确定要删除此对话吗？', function() {
-    fetch('/api/conversations/'+id,{method:'DELETE'}).then(function(){closeHistory();loadHistory();});
+    kejiFetch('/api/conversations/'+id,{method:'DELETE'}).then(function(){closeHistory();loadHistory();});
   });
 }
 function addSplit2(convId) {
@@ -80,7 +80,7 @@ function addSplit2(convId) {
   var msgs = document.getElementById('splitMessages');
   if (!panel || !msgs) return;
   msgs.innerHTML = '';
-  fetch('/api/conversations/' + convId).then(function(r){ return r.json(); }).then(function(d){
+  kejiFetch('/api/conversations/' + convId).then(function(r){ return r.json(); }).then(function(d){
     if (d.messages && d.messages.length) {
       d.messages.forEach(function(m){
         var div = document.createElement('div');
@@ -109,7 +109,7 @@ function stopStreaming() {
     try { currentReader.cancel(); } catch(e) {}
     currentReader = null;
   }
-  fetch("/chat/stop", {
+  kejiFetch("/chat/stop", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: sessionId })
@@ -122,7 +122,7 @@ function stopSplitStreaming() {
     try { splitReader.cancel(); } catch(e) {}
     splitReader = null;
   }
-  fetch("/chat/stop", {
+  kejiFetch("/chat/stop", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: sessionId })
@@ -168,7 +168,7 @@ function sendSplitChat() {
 
   // 发送流式请求
   var convId = splitConvId || '';
-  fetch('/chat/stream', {
+  kejiFetch('/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -345,7 +345,7 @@ function deleteSelected() {
   if (ids.length === 0) { showAlert('提示', '请先勾选要删除的对话'); return; }
   showDangerConfirm('批量删除对话', '确定删除选中的 ' + ids.length + ' 个对话吗？', function() {
     Promise.all(ids.map(function(id) {
-      return fetch('/api/conversations/' + id, { method: 'DELETE' });
+      return kejiFetch('/api/conversations/' + id, { method: 'DELETE' });
     })).then(function() {
       loadHistory();
       if (currentConvId && ids.indexOf(currentConvId) >= 0) newChat();
@@ -355,12 +355,12 @@ function deleteSelected() {
 
 function deleteAllHistory() {
   showDangerConfirm('删除全部对话', '确定删除全部对话吗？此操作不可恢复！', function() {
-    fetch('/api/conversations').then(function(r){return r.json()}).then(function(d){
+    kejiFetch('/api/conversations').then(function(r){return r.json()}).then(function(d){
       var arr = d.conversations||[];
       if (!arr.length) { showAlert('提示', '没有可删除的对话'); return; }
       showDangerConfirm('再次确认', '共 ' + arr.length + ' 个对话，确定全部删除？', function() {
         Promise.all(arr.map(function(c) {
-          return fetch('/api/conversations/' + c.id, { method: 'DELETE' });
+          return kejiFetch('/api/conversations/' + c.id, { method: 'DELETE' });
         })).then(function() {
           loadHistory();
           newChat();
@@ -375,7 +375,7 @@ loadHistory = function() {
   var list = document.getElementById('historyList');
   if (!list) return;
   list.innerHTML = '<div style="text-align:center;padding:20px;color:#999">加载中...</div>';
-  fetch('/api/conversations').then(function(r){return r.json()}).then(function(d){
+  kejiFetch('/api/conversations').then(function(r){return r.json()}).then(function(d){
     var arr = d.conversations||[];
     if (!arr.length) { list.innerHTML = '<div style="text-align:center;padding:30px;color:#999">暂无对话</div>'; return; }
     list.innerHTML = arr.map(function(c){

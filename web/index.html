@@ -321,6 +321,20 @@
     <div class="settings-content">
       <div class="settings-group">
         <h3>
+          <span class="icon-emoji">🔐</span>
+          <i class="icon-fa fa-solid fa-shield-halved" style="margin-right:4px"></i> 访问密钥
+        </h3>
+        <div class="settings-row">
+          <div><label>科吉 API Key</label><div class="desc">与服务器 KEJI_API_KEY 或 data/security/api_key 一致；本机开发可留空（若已开启 localhost 免鉴权）</div></div>
+          <input type="password" id="setKejiApiKey" value="" placeholder="粘贴 API Key" style="min-width:280px">
+        </div>
+        <div style="padding:8px 0 16px">
+          <button class="btn btn-secondary" type="button" onclick="saveKejiApiKey()">保存访问密钥</button>
+          <span id="securityStatusHint" style="margin-left:12px;font-size:12px;color:var(--text-muted)"></span>
+        </div>
+      </div>
+      <div class="settings-group">
+        <h3>
           <span class="icon-emoji">🤖</span>
           <i class="icon-fa fa-solid fa-microchip" style="margin-right:4px"></i> 模型配置
         </h3>
@@ -439,6 +453,52 @@
         <div class="settings-row">
           <div><label>回调URL</label><div class="desc">企业微信后台 → 自建应用 → 配置回调URL（需要公网可达）</div></div>
           <span id="workCallbackUrl" style="font-size:12px;color:var(--text-secondary);word-break:break-all">保存配置后自动生成</span>
+        </div>
+      </div>
+      <div class="settings-group" id="auditSettingsGroup">
+        <h3>
+          <span class="icon-emoji">📋</span>
+          <i class="icon-fa fa-solid fa-clipboard-list" style="margin-right:4px"></i> 审计日志
+        </h3>
+        <p style="font-size:12px;color:var(--text-secondary);margin:-8px 0 12px;line-height:1.5">
+          记录工具调用与文件访问，同时写入 <code style="font-size:11px">logs/audit.jsonl</code> 与数据库。敏感参数已脱敏。
+        </p>
+        <div class="audit-toolbar">
+          <label style="font-size:13px;color:var(--text-secondary)">类型</label>
+          <select id="auditEventType" onchange="loadAuditLogs()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+            <option value="">全部</option>
+            <option value="tool_call">工具调用</option>
+            <option value="file_access">文件访问</option>
+          </select>
+          <label style="font-size:13px;color:var(--text-secondary)">条数</label>
+          <select id="auditLimit" onchange="loadAuditLogs()" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+            <option value="50">50</option>
+            <option value="100" selected>100</option>
+            <option value="200">200</option>
+          </select>
+          <button type="button" class="btn btn-secondary" onclick="loadAuditLogs()" id="auditRefreshBtn" style="padding:6px 14px;font-size:13px">
+            <span class="icon-emoji">🔄</span>
+            <i class="icon-fa fa-solid fa-rotate" style="margin-right:4px"></i>刷新
+          </button>
+          <span id="auditLoadHint" style="font-size:12px;color:var(--text-muted);margin-left:auto"></span>
+        </div>
+        <div class="stats-table-wrap audit-table-wrap">
+          <div class="stats-table-scroll" style="max-height:360px">
+            <table class="stats-table" id="auditLogTable">
+              <thead>
+                <tr>
+                  <th style="width:140px">时间</th>
+                  <th style="width:88px">类型</th>
+                  <th style="width:120px">工具/动作</th>
+                  <th>路径 / 详情</th>
+                  <th style="width:56px">状态</th>
+                </tr>
+              </thead>
+              <tbody id="auditLogBody">
+                <tr><td colspan="5" style="text-align:center;color:var(--text-secondary);padding:24px">进入设置页或点击刷新加载</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
       <div class="settings-group">
