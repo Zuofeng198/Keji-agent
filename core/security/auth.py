@@ -13,6 +13,8 @@ from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from core.security.secrets import load_app_config, resolve_env_ref
+from core.security.context import clear_request_context, set_request_context
+from core.security.users import CurrentUser, decode_access_token
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _KEY_FILE = _PROJECT_ROOT / "data" / "security" / "api_key"
@@ -23,6 +25,7 @@ _DEFAULT_PUBLIC_PREFIXES = (
     "/favicon.ico",
     "/static",
     "/api/security/status",
+    "/api/auth/login",
     "/api/work",
 )
 
@@ -33,6 +36,7 @@ class SecuritySettings:
     api_key: str
     allow_localhost_without_auth: bool
     public_prefixes: tuple[str, ...]
+    auth_mode: str  # both | user_only | api_key_only
 
 
 _settings_cache: SecuritySettings | None = None
@@ -71,11 +75,16 @@ def get_security_settings(reload: bool = False) -> SecuritySettings:
     extra_public = sec.get("public_paths") or []
     prefixes = tuple(_DEFAULT_PUBLIC_PREFIXES) + tuple(extra_public)
 
+    auth_mode = str(sec.get("auth_mode", "both")).strip().lower()
+    if auth_mode not in ("both", "user_only", "api_key_only"):
+        auth_mode = "both"
+
     _settings_cache = SecuritySettings(
-        enabled=enabled and bool(api_key),
+        enabled=enabled,
         api_key=api_key,
-        allow_localhost_without_auth=bool(sec.get("allow_localhost_without_auth", True)),
+        allow_localhost_without_auth=bool(sec.get("allow_localhost_without_auth", False)),
         public_prefixes=prefixes,
+        auth_mode=auth_mode,
     )
     return _settings_cache
 
@@ -114,26 +123,90 @@ def verify_api_key(request: Request, settings: SecuritySettings | None = None) -
         return True
     if settings.allow_localhost_without_auth and _is_localhost(request):
         return True
+    if settings.auth_mode == "user_only":
+        return False
+    if not settings.api_key:
+        return False
     provided = _extract_api_key(request)
     if not provided:
         return False
     return secrets.compare_digest(provided, settings.api_key)
 
 
+def _looks_like_jwt(token: str) -> bool:
+    return token.count(".") == 2
+
+
+def authenticate_request(
+    request: Request,
+    settings: SecuritySettings | None = None,
+) -> CurrentUser | None:
+    """解析 JWT 或 API Key，返回当前用户。"""
+    settings = settings or get_security_settings()
+    if not settings.enabled:
+        return CurrentUser(id="anonymous", username="guest", role="admin")
+
+    token = _extract_api_key(request)
+    if token:
+        if settings.auth_mode != "api_key_only" and _looks_like_jwt(token):
+            payload = decode_access_token(token)
+            if payload and payload.get("sub"):
+                from core.database.db import get_db
+
+                row = get_db().get_user_by_id(str(payload["sub"]))
+                if row and row.get("is_active"):
+                    return CurrentUser(
+                        id=row["id"],
+                        username=row["username"],
+                        role=row["role"],
+                        display_name=row.get("display_name") or row["username"],
+                    )
+            if settings.auth_mode == "user_only":
+                return None
+
+        if settings.auth_mode != "user_only" and settings.api_key:
+            if secrets.compare_digest(token, settings.api_key):
+                return CurrentUser(
+                    id="service",
+                    username="api_key",
+                    role="admin",
+                    display_name="API Key",
+                )
+
+    if settings.allow_localhost_without_auth and _is_localhost(request):
+        return CurrentUser(id="localhost", username="localhost", role="admin")
+    return None
+
+
 class APIKeyMiddleware(BaseHTTPMiddleware):
+    """统一鉴权：登录 JWT + 可选服务 API Key。"""
+
     async def dispatch(self, request: Request, call_next):
         settings = get_security_settings()
         path = request.url.path
+        client_ip = request.client.host if request.client else ""
 
-        if not settings.enabled or _is_public_path(path, settings.public_prefixes):
-            return await call_next(request)
+        try:
+            if not settings.enabled or _is_public_path(path, settings.public_prefixes):
+                set_request_context(client_ip=client_ip, actor="api")
+                return await call_next(request)
 
-        if verify_api_key(request, settings):
-            return await call_next(request)
+            user = authenticate_request(request, settings)
+            if user is not None:
+                request.state.user = user
+                set_request_context(
+                    client_ip=client_ip,
+                    actor=user.username,
+                    user_id=user.id,
+                    role=user.role,
+                )
+                return await call_next(request)
 
-        return JSONResponse(
-            status_code=401,
-            content={
-                "detail": "未授权：请提供有效的 API Key（Header: Authorization: Bearer <key> 或 X-API-Key）",
-            },
-        )
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "detail": "未授权：请登录（/api/auth/login）或使用有效 API Key",
+                },
+            )
+        finally:
+            clear_request_context()

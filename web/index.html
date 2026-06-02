@@ -31,6 +31,22 @@
 <script>document.addEventListener('DOMContentLoaded',function(){var s=document.createElement('style');s.textContent='.skill-card.active{background:#e8f5e9 !important;border-color:#27ae60 !important}';document.head.appendChild(s);});</script>
 <body>
 
+<div id="loginOverlay" class="login-overlay open">
+  <div class="login-card">
+    <h2>登录科吉</h2>
+    <p class="login-sub">使用管理员分配的本地账号</p>
+    <form id="loginForm">
+      <label>用户名</label>
+      <input type="text" id="loginUsername" autocomplete="username" required>
+      <label>密码</label>
+      <input type="password" id="loginPassword" autocomplete="current-password" required>
+      <div id="loginError" class="login-error"></div>
+      <button type="submit" class="btn btn-primary login-submit">登录</button>
+      <p class="login-hint"><a href="#" onclick="clearKejiLocalAuth();return false">清除本地登录缓存</a>（若提示过期或无法登录可点此）</p>
+    </form>
+  </div>
+</div>
+
 <!-- ===== 侧边栏 ===== -->
 <aside class="sidebar">
   <div class="sidebar-header">
@@ -54,7 +70,7 @@
       <span class="icon">
         <span class="icon-emoji">📁</span>
         <i class="icon-fa fa-solid fa-folder"></i>
-      </span> 文件浏览
+      </span> 团队文件
     </div>
     <div class="nav-item" data-page="settings" onclick="switchPage('settings')">
       <span class="icon">
@@ -80,7 +96,18 @@
         <i class="icon-fa fa-solid fa-tools"></i>
       </span> 工具
     </div>
-  </nav>  </nav>
+    <div class="nav-item" id="navAdmin" data-page="admin" onclick="switchPage('admin')" style="display:none">
+      <span class="icon">
+        <span class="icon-emoji">🛡️</span>
+        <i class="icon-fa fa-solid fa-user-shield"></i>
+      </span> 管理
+    </div>
+  </nav>
+  <div id="userBar" class="sidebar-user" style="display:none">
+    <span id="userDisplayName">用户</span>
+    <span id="userRoleBadge" class="user-role-badge">成员</span>
+    <button type="button" class="btn-logout" onclick="logoutKeji()" title="退出登录">退出</button>
+  </div>
   <div class="sidebar-mode">
     <!-- Agent 模式已整合到自动流程中，无需手动切换 -->
   </div>
@@ -283,27 +310,38 @@
     </div>
   </div>
 
-  <!-- ===== 文件浏览页面 ===== -->
+  <!-- ===== 团队文件页面 ===== -->
   <div class="page" id="page-files">
     <div class="page-header">
       <div>
         <h2>
           <span class="icon-emoji">📁</span>
-          <i class="icon-fa fa-solid fa-folder-open" style="margin-right:6px"></i>文件浏览
+          <i class="icon-fa fa-solid fa-folder-open" style="margin-right:6px"></i>团队文件
         </h2>
-        <p>浏览电脑文件，快速索引到知识库</p>
+        <p>服务器共享目录与个人空间，支持上传与索引到知识库</p>
       </div>
     </div>
     <div class="fb-content">
-      <div class="fb-path-bar">
-        <button class="nav-btn" onclick="goUpDir()" title="上一级"><span class="icon-emoji">⬆</span><i class="icon-fa fa-solid fa-arrow-up"></i></button>
-        <span class="path-text" id="fbPath">C:\</span>
-        <button class="nav-btn" onclick="refreshFiles()" title="刷新">
-          <span class="icon-emoji">🔄</span>
-          <i class="icon-fa fa-solid fa-rotate"></i>
-        </button>
+      <div class="fb-roots" id="fbRoots"></div>
+      <div class="fb-toolbar">
+        <div class="fb-path-bar">
+          <button class="nav-btn" onclick="goUpDir()" title="上一级"><span class="icon-emoji">⬆</span><i class="icon-fa fa-solid fa-arrow-up"></i></button>
+          <span class="path-text" id="fbPath">加载中…</span>
+          <button class="nav-btn" onclick="refreshFiles()" title="刷新">
+            <span class="icon-emoji">🔄</span>
+            <i class="icon-fa fa-solid fa-rotate"></i>
+          </button>
+        </div>
+        <div class="fb-actions" id="fbActions">
+          <input type="file" id="fbUploadInput" multiple style="display:none" onchange="onFbUploadPick(this)">
+          <button type="button" class="btn btn-sm btn-primary" id="fbUploadBtn" onclick="triggerFbUpload()" style="display:none">
+            <span class="icon-emoji">📤</span><i class="icon-fa fa-solid fa-upload"></i> 上传
+          </button>
+          <button type="button" class="btn btn-sm btn-outline" id="fbMkdirBtn" onclick="fbCreateFolder()" style="display:none">
+            <span class="icon-emoji">📂</span><i class="icon-fa fa-solid fa-folder-plus"></i> 新建文件夹
+          </button>
+        </div>
       </div>
-      <div class="fb-drives" id="fbDrives"></div>
       <div class="fb-items" id="fbItems"><div class="loading"><div class="spinner"></div>加载中...</div></div>
     </div>
   </div>
@@ -326,7 +364,7 @@
           <i class="icon-fa fa-solid fa-shield-halved" style="margin-right:4px"></i> 访问密钥
         </h3>
         <div class="settings-row">
-          <div><label>科吉 API Key</label><div class="desc">与服务器 KEJI_API_KEY 或 data/security/api_key 一致；本机开发可留空（若已开启 localhost 免鉴权）</div></div>
+          <div><label>科吉 API Key（可选）</label><div class="desc">仅脚本/外部调用需要；网页请用账号登录。与服务器 KEJI_API_KEY 或 data/security/api_key 一致</div></div>
           <input type="password" id="setKejiApiKey" value="" placeholder="粘贴 API Key" style="min-width:280px">
         </div>
         <div style="padding:8px 0 16px">
@@ -877,6 +915,123 @@
     </div>
   </div>
 
+  <!-- ===== 管理页面（仅 admin） ===== -->
+  <div class="page" id="page-admin">
+    <div class="page-header">
+      <div>
+        <h2>
+          <span class="icon-emoji">🛡️</span>
+          <i class="icon-fa fa-solid fa-user-shield" style="margin-right:6px"></i>系统管理
+        </h2>
+        <p>用户权限与全员对话审计（仅管理员）</p>
+      </div>
+      <button type="button" class="btn btn-sm btn-outline" onclick="loadAdminPage()" title="刷新数据">
+        <span class="icon-emoji">🔄</span>
+        <i class="icon-fa fa-solid fa-rotate"></i> 刷新
+      </button>
+    </div>
+    <div class="admin-content">
+      <div class="admin-stats" id="adminStats">
+        <div class="stat-card stat-users">
+          <div class="stat-icon"><span class="icon-emoji">👥</span><i class="icon-fa fa-solid fa-users"></i></div>
+          <div class="stat-body"><div class="number" id="adminStatUsers">-</div><div class="label">用户总数</div></div>
+        </div>
+        <div class="stat-card stat-active">
+          <div class="stat-icon"><span class="icon-emoji">✅</span><i class="icon-fa fa-solid fa-user-check"></i></div>
+          <div class="stat-body"><div class="number" id="adminStatActive">-</div><div class="label">已启用</div></div>
+        </div>
+        <div class="stat-card stat-convs">
+          <div class="stat-icon"><span class="icon-emoji">💬</span><i class="icon-fa fa-solid fa-comments"></i></div>
+          <div class="stat-body"><div class="number" id="adminStatConvs">-</div><div class="label">对话记录</div></div>
+        </div>
+      </div>
+
+      <div class="settings-group admin-group">
+        <h3>
+          <span class="icon-emoji">👤</span>
+          <i class="icon-fa fa-solid fa-user-gear" style="margin-right:4px"></i> 用户与权限
+        </h3>
+        <div class="admin-create-card">
+          <div class="admin-create-title">
+            <span class="icon-emoji">➕</span>
+            <i class="icon-fa fa-solid fa-user-plus"></i> 创建新用户
+          </div>
+          <div class="admin-form-grid">
+            <div class="admin-form-field">
+              <label for="adminNewUsername">用户名</label>
+              <input type="text" id="adminNewUsername" placeholder="至少 2 个字符" autocomplete="off">
+            </div>
+            <div class="admin-form-field">
+              <label for="adminNewPassword">初始密码</label>
+              <input type="password" id="adminNewPassword" placeholder="至少 6 位" autocomplete="new-password">
+            </div>
+            <div class="admin-form-field">
+              <label for="adminNewDisplay">显示名</label>
+              <input type="text" id="adminNewDisplay" placeholder="可选，默认同用户名">
+            </div>
+            <div class="admin-form-field">
+              <label for="adminNewRole">角色</label>
+              <select id="adminNewRole">
+                <option value="member">成员</option>
+                <option value="readonly">只读</option>
+                <option value="admin">管理员</option>
+              </select>
+            </div>
+          </div>
+          <div class="admin-create-actions">
+            <button type="button" class="btn btn-primary" onclick="adminCreateUser()">
+              <span class="icon-emoji">✓</span>
+              <i class="icon-fa fa-solid fa-check"></i> 创建用户
+            </button>
+          </div>
+        </div>
+        <div class="admin-list-header">
+          <span>用户列表</span>
+          <span id="adminUserCount" class="admin-list-count"></span>
+        </div>
+        <div id="adminUserList" class="admin-user-cards">
+          <div class="loading"><div class="spinner"></div>加载中...</div>
+        </div>
+      </div>
+
+      <div class="settings-group admin-group">
+        <h3>
+          <span class="icon-emoji">📋</span>
+          <i class="icon-fa fa-solid fa-clipboard-list" style="margin-right:4px"></i> 全部对话
+        </h3>
+        <div class="admin-conv-toolbar kb-search-bar">
+          <span class="kb-search-icon"><span class="icon-emoji">🔍</span><i class="icon-fa fa-solid fa-filter"></i></span>
+          <select id="adminConvUserFilter" onchange="loadAdminConversations()">
+            <option value="">全部用户</option>
+          </select>
+          <button type="button" class="btn btn-sm btn-outline" onclick="loadAdminConversations()">
+            <span class="icon-emoji">🔄</span>
+            <i class="icon-fa fa-solid fa-rotate"></i> 刷新列表
+          </button>
+        </div>
+        <div class="admin-conv-layout">
+          <div class="admin-conv-panel">
+            <div class="admin-panel-title">对话列表</div>
+            <div id="adminConvList" class="admin-conv-list">
+              <div class="loading"><div class="spinner"></div>加载中...</div>
+            </div>
+          </div>
+          <div class="admin-conv-panel admin-conv-panel-preview">
+            <div class="admin-panel-title">对话内容</div>
+            <div id="adminConvPreview" class="admin-conv-preview">
+              <div class="admin-preview-scroll">
+                <div class="admin-preview-empty">
+                  <div class="big-icon"><span class="icon-emoji">💬</span><i class="icon-fa fa-solid fa-message"></i></div>
+                  <p>从左侧选择一条对话查看最近消息</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </main>
 
 <link rel="stylesheet" href="/static/css/style.css?v=VERSION">
@@ -908,6 +1063,7 @@
 <div class="toast-container" id="toastContainer"></div>
 
 <script src="/static/js/core.js?v=VERSION"></script>
+<script src="/static/js/auth.js?v=VERSION"></script>
 <script src="/static/js/chat.js?v=VERSION"></script>
 <script src="/static/js/pages.js?v=VERSION"></script>
 <script src="/static/js/init.js?v=VERSION"></script>

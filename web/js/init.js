@@ -1,9 +1,11 @@
-checkStatus();
-loadThinkingSetting();
-loadIconTheme();
-loadModelSettings();
-loadAgentMode();
-updateModeUI(agentMode);
+initAuth().then(function() {
+  if (!window.kejiAuthReady) return;
+  checkStatus();
+  loadThinkingSetting();
+  loadIconTheme();
+  loadModelSettings();
+  loadAgentMode();
+  updateModeUI(agentMode);
 // 模式按钮图标跟随主题
 (function(){
   var rb = document.getElementById('modeBtnReact');
@@ -11,8 +13,9 @@ updateModeUI(agentMode);
   if(rb) rb.innerHTML = _dualIcon('⚡','fa-bolt') + ' 急速';
   if(pb) pb.innerHTML = _dualIcon('📋','fa-clock') + ' 计划';
 })();
-loadWorkConfig();
-setInterval(checkStatus, 15000);
+  loadWorkConfig();
+  setInterval(checkStatus, 15000);
+});
 
 // 自动调整输入框高度
 document.getElementById('chatInput').addEventListener('input', function() {

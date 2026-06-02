@@ -175,57 +175,140 @@ function searchKnowledge() {
 }
 
 // ================================================================
-// 文件浏览
+// 团队文件
 // ================================================================
+var fbMode = 'workspace';
+var fbCurrentPath = '';
+var fbCurrentAbsPath = '';
+var fbCanWrite = false;
+var fbRoots = [];
+
+function fbRootIcon(id) {
+  if (id === 'shared') return _dualIcon('🌐', 'fa-users');
+  if (id === 'mine') return _dualIcon('👤', 'fa-user');
+  if (id === 'users') return _dualIcon('👥', 'fa-users-gear');
+  return _dualIcon('💾', 'fa-hard-drive');
+}
+
+function fbRootDesc(id) {
+  if (id === 'shared') return '全员可访问';
+  if (id === 'mine') return '仅您与管理员';
+  if (id === 'users') return '管理员查看各账号';
+  return '';
+}
+
+function renderFbRoots(roots) {
+  var div = document.getElementById('fbRoots');
+  if (!div) return;
+  if (!roots || !roots.length) {
+    div.innerHTML = '';
+    return;
+  }
+  div.innerHTML = roots.map(function(r) {
+    return '<button type="button" class="fb-root-btn" data-path="' + escHtml(r.path) + '" data-id="' + escHtml(r.id || '') + '">' +
+      fbRootIcon(r.id) + ' <span><span>' + escHtml(r.name) + '</span>' +
+      '<span class="root-desc">' + escHtml(fbRootDesc(r.id)) + '</span></span></button>';
+  }).join('');
+  div.onclick = function(e) {
+    var btn = e.target.closest('.fb-root-btn');
+    if (!btn) return;
+    document.querySelectorAll('.fb-root-btn').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    listFiles(btn.getAttribute('data-path'));
+  };
+}
+
+function updateFbActions(canUpload) {
+  var up = document.getElementById('fbUploadBtn');
+  var mk = document.getElementById('fbMkdirBtn');
+  var show = fbMode === 'workspace' && fbCanWrite && fbCurrentAbsPath;
+  if (up) up.style.display = show && canUpload ? '' : 'none';
+  if (mk) mk.style.display = show ? '' : 'none';
+}
+
 function loadDrives() {
-  kejiFetch('/api/files/drives').then(r => r.json()).then(d => {
-    const div = document.getElementById('fbDrives');
-    // 使用 data-path 避免路径中反斜杠破坏 onclick 字符串
-    div.innerHTML = (d.drives || []).map(drv =>
-      `<button class="drive-btn" data-path="${drv.path}">` + _dualIcon('💾', 'fa-floppy-disk') + ` ${drv.name}</button>`
-    ).join('');
-    // 事件委托处理盘符点击
-    div.onclick = function(e) {
-      var btn = e.target.closest('.drive-btn');
-      if (btn) listFiles(btn.getAttribute('data-path'));
-    };
-    // 默认打开 C:
-    if (d.drives && d.drives.length) listFiles('C:\\');
-  }).catch(() => {});
+  if (!getKejiToken() && window.kejiAuthReady !== true) {
+    var items = document.getElementById('fbItems');
+    if (items) items.innerHTML = '<div class="empty-list">请先登录后再使用团队文件</div>';
+    return;
+  }
+  kejiFetch('/api/files/roots').then(function(r) {
+    if (!r.ok) {
+      return r.json().then(function(d) {
+        throw new Error(d.detail || ('HTTP ' + r.status));
+      }).catch(function() { throw new Error('HTTP ' + r.status); });
+    }
+    return r.json();
+  }).then(function(d) {
+    fbMode = d.mode || 'workspace';
+    fbRoots = d.roots || [];
+    renderFbRoots(fbRoots);
+    if (fbRoots.length) {
+      var first = document.querySelector('.fb-root-btn');
+      if (first) first.classList.add('active');
+      listFiles(fbRoots[0].path);
+    } else {
+      return kejiFetch('/api/files/drives').then(function(r2) { return r2.json(); }).then(function(legacy) {
+        fbMode = legacy.mode || 'legacy';
+        fbRoots = (legacy.drives || []).map(function(drv) {
+          return { id: 'legacy', name: drv.name, path: drv.path };
+        });
+        renderFbRoots(fbRoots);
+        if (fbRoots.length) listFiles(fbRoots[0].path);
+      });
+    }
+  }).catch(function(e) {
+    var msg = (e && e.message) ? e.message : '加载失败';
+    if (msg.indexOf('401') >= 0) msg = '登录已失效，请重新登录';
+    document.getElementById('fbPath').textContent = '—';
+    document.getElementById('fbItems').innerHTML = '<div class="empty-list">' + escHtml(msg) + '</div>';
+  });
 }
 
 function listFiles(path) {
-  document.getElementById('fbPath').textContent = path;
+  fbCurrentAbsPath = path;
+  document.getElementById('fbPath').textContent = '加载中…';
   document.getElementById('fbItems').innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
 
   kejiFetch('/api/files/list?path=' + encodeURIComponent(path))
-    .then(r => r.json()).then(d => {
-      const items = document.getElementById('fbItems');
+    .then(function(r) {
+      if (!r.ok) return r.json().then(function(err) { throw new Error(err.detail || ('HTTP ' + r.status)); });
+      return r.json();
+    })
+    .then(function(d) {
+      fbMode = d.mode || fbMode;
+      fbCanWrite = !!d.can_write;
+      fbCurrentPath = d.display_path || d.path;
+      document.getElementById('fbPath').textContent = fbCurrentPath;
+      updateFbActions(!!d.can_upload);
+
+      var items = document.getElementById('fbItems');
       items.innerHTML = '';
 
       if (d.parent) {
-        const up = document.createElement('div');
+        var up = document.createElement('div');
         up.className = 'fb-item';
-        up.innerHTML = '<span class="item-icon">' + _dualIcon('📂', 'fa-folder-open') + '</span><span class="item-name" style="font-weight:600">.. 上级目录</span>';
-        up.onclick = () => listFiles(d.parent);
+        up.innerHTML = '<span class="item-icon">' + _dualIcon('📂', 'fa-folder-open') + '</span><span class="item-name" style="font-weight:600">.. 返回上级</span>';
+        up.onclick = function() { listFiles(d.parent); };
         items.appendChild(up);
       }
 
-      (d.items || []).forEach(item => {
-        const div = document.createElement('div');
+      (d.items || []).forEach(function(item) {
+        var div = document.createElement('div');
         div.className = 'fb-item';
         div.setAttribute('data-path', item.path);
         div.setAttribute('data-dir', item.is_dir ? '1' : '0');
         if (item.is_supported) div.setAttribute('data-indexable', '1');
-        const icon = item.is_dir ? _dualIcon('📁', 'fa-folder') : getFileIcon(item.ext);
-        const size = item.is_dir ? '' : item.size_str;
+        var icon = item.is_dir ? _dualIcon('📁', 'fa-folder') : getFileIcon(item.ext);
+        var size = item.is_dir ? '' : item.size_str;
+        var showName = item.name;
 
-        let html = '<span class="item-icon">' + icon + '</span>';
+        var html = '<span class="item-icon">' + icon + '</span>';
         if (item.is_dir) {
-          html += '<span class="item-name">' + escHtml(item.name) + '</span>';
+          html += '<span class="item-name">' + escHtml(showName) + '</span>';
           html += '<span class="item-meta">' + (item.modified || '') + '</span>';
         } else {
-          html += '<span class="item-name">' + escHtml(item.name) + '</span>';
+          html += '<span class="item-name">' + escHtml(showName) + '</span>';
           html += '<span class="item-meta">' + size + ' · ' + (item.modified || '') + '</span>';
           if (item.is_supported) {
             html += '<button class="index-btn">+ 索引</button>';
@@ -233,7 +316,6 @@ function listFiles(path) {
         }
         div.innerHTML = html;
 
-        // 文件夹单击进入；文件双击打开；索引按钮点击索引
         div.onclick = function(e) {
           var btn = e.target.closest('.index-btn');
           if (btn) {
@@ -249,32 +331,99 @@ function listFiles(path) {
           if (e.target.closest('.index-btn')) return;
           if (this.getAttribute('data-dir') === '0') {
             var fp = this.getAttribute('data-path');
-            var fname = fp.split('\\').pop();
-            showConfirm('打开文件', '确定要用系统默认程序打开以下文件吗？\n\n' + fname, function() {
+            var fname = fp.split(/[/\\]/).pop();
+            showConfirm('打开文件', '将在服务器上用默认程序打开：\n\n' + fname, function() {
               openLocalFile(fp);
             });
           }
         };
         items.appendChild(div);
       });
-    }).catch(e => {
-      document.getElementById('fbItems').innerHTML = '<div class="empty-list">❌ 加载失败: ' + e.message + '</div>';
+
+      if (!(d.items || []).length && !d.parent) {
+        items.innerHTML = '<div class="empty-list">此文件夹为空，可上传文件</div>';
+      }
+    })
+    .catch(function(e) {
+      document.getElementById('fbItems').innerHTML = '<div class="empty-list">❌ ' + escHtml(e.message || '加载失败') + '</div>';
+      updateFbActions(false);
     });
 }
 
 function goUpDir() {
-  const current = document.getElementById('fbPath').textContent;
-  const parent = current.split('\\').filter(Boolean).slice(0, -1).join('\\');
-  if (parent.length >= 2) {
-    listFiles(parent + '\\');
-  } else {
+  if (!fbCurrentAbsPath) {
     loadDrives();
+    return;
   }
+  kejiFetch('/api/files/list?path=' + encodeURIComponent(fbCurrentAbsPath))
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.parent) {
+        listFiles(d.parent);
+      } else {
+        document.querySelectorAll('.fb-root-btn').forEach(function(b) { b.classList.remove('active'); });
+        loadDrives();
+      }
+    })
+    .catch(function() { loadDrives(); });
 }
 
 function refreshFiles() {
-  const current = document.getElementById('fbPath').textContent;
-  if (current) listFiles(current);
+  if (fbCurrentAbsPath) listFiles(fbCurrentAbsPath);
+  else loadDrives();
+}
+
+function triggerFbUpload() {
+  var inp = document.getElementById('fbUploadInput');
+  if (inp) inp.click();
+}
+
+function onFbUploadPick(input) {
+  if (!input.files || !input.files.length || !fbCurrentAbsPath) return;
+  var files = Array.from(input.files);
+  input.value = '';
+  var idx = 0;
+  function next() {
+    if (idx >= files.length) {
+      refreshFiles();
+      return;
+    }
+    var f = files[idx++];
+    var fd = new FormData();
+    fd.append('file', f);
+    kejiFetch('/api/files/upload?path=' + encodeURIComponent(fbCurrentAbsPath), {
+      method: 'POST',
+      body: fd,
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      if (d.status === 'ok') toast('已上传: ' + (d.file_name || f.name), 'success');
+      else toast('上传失败', 'error');
+      next();
+    }).catch(function(e) {
+      toast('上传失败: ' + (e.message || ''), 'error');
+      next();
+    });
+  }
+  toast('正在上传 ' + files.length + ' 个文件…', 'info');
+  next();
+}
+
+function fbCreateFolder() {
+  if (!fbCurrentAbsPath) return;
+  var name = prompt('新建文件夹名称');
+  if (!name || !name.trim()) return;
+  kejiFetch('/api/files/mkdir', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: fbCurrentAbsPath, name: name.trim() }),
+  }).then(function(r) {
+    if (!r.ok) return r.json().then(function(d) { throw new Error(d.detail || '创建失败'); });
+    return r.json();
+  }).then(function() {
+    toast('文件夹已创建', 'success');
+    refreshFiles();
+  }).catch(function(e) {
+    toast(e.message || '创建失败', 'error');
+  });
 }
 
 function openLocalFile(filePath) {
@@ -322,6 +471,13 @@ function applyIconTheme(theme) {
     document.body.classList.remove('theme-fa');
   }
   localStorage.setItem('keji_icon_theme', theme);
+  if (window.kejiCurrentUser && window.kejiAuthReady && typeof kejiFetch === 'function') {
+    kejiFetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { icon_theme: theme } }),
+    }).catch(function () {});
+  }
 }
 function loadIconTheme() {
   var theme = localStorage.getItem('keji_icon_theme') || 'emoji';
@@ -346,13 +502,28 @@ function saveKejiApiKey() {
 function loadSecurityStatus() {
   var hint = document.getElementById('securityStatusHint');
   if (!hint) return;
-  fetch('/api/security/status').then(function(r) { return r.json(); }).then(function(d) {
+  var headers = {};
+  var token = getKejiToken();
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  fetch('/api/security/status', { headers: headers }).then(function(r) { return r.json(); }).then(function(d) {
     if (!d.auth_enabled) {
       hint.textContent = '服务端未启用鉴权';
+      hint.style.color = '';
       return;
     }
-    hint.textContent = d.authenticated ? '已认证' : '未认证（请填写 API Key）';
-    hint.style.color = d.authenticated ? '#27ae60' : '#e67e22';
+    if (d.user && d.user.username) {
+      hint.textContent = '已登录：' + (d.user.display_name || d.user.username) +
+        (d.user.role === 'admin' ? '（管理员）' : '');
+      hint.style.color = '#27ae60';
+      return;
+    }
+    if (window.kejiCurrentUser) {
+      hint.textContent = '已登录：' + (window.kejiCurrentUser.display_name || window.kejiCurrentUser.username);
+      hint.style.color = '#27ae60';
+      return;
+    }
+    hint.textContent = '未登录（请使用账号登录；API Key 仅用于脚本调用）';
+    hint.style.color = '#e67e22';
   }).catch(function() { hint.textContent = ''; });
 }
 
@@ -456,6 +627,7 @@ function loadModelSettings() {
     if (mik) mik.checked = s.mcp_include_knowledge !== false && s.mcp_include_knowledge !== 'false';
     var mid = document.getElementById('setMcpIncludeData');
     if (mid) mid.checked = s.mcp_include_data !== false && s.mcp_include_data !== 'false';
+    if (s.icon_theme) applyIconTheme(s.icon_theme);
     var mcpHint = document.getElementById('setMcpResolvedHint');
     if (mcpHint && s.mcp_resolved_dirs && s.mcp_resolved_dirs.length) {
       mcpHint.textContent = s.mcp_resolved_dirs.join(' · ');
@@ -558,6 +730,7 @@ function saveSettings() {
     mcp_filesystem_dirs: document.getElementById('setMcpDirs') ? document.getElementById('setMcpDirs').value : '',
     mcp_include_knowledge: document.getElementById('setMcpIncludeKnowledge') ? document.getElementById('setMcpIncludeKnowledge').checked : true,
     mcp_include_data: document.getElementById('setMcpIncludeData') ? document.getElementById('setMcpIncludeData').checked : true,
+    icon_theme: document.getElementById('setIconTheme') ? document.getElementById('setIconTheme').value : 'emoji',
   };
 
   kejiFetch('/api/settings', {

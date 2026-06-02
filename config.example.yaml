@@ -4,11 +4,25 @@
 
 security:
   enabled: true
+  auth_mode: both
   api_key: ${KEJI_API_KEY}
-  allow_localhost_without_auth: true
+  jwt_secret: ${KEJI_JWT_SECRET}
+  jwt_expire_hours: 72
+  allow_localhost_without_auth: false
   public_paths: []
+  bootstrap_admin:
+    username: admin
+    password: ${KEJI_ADMIN_PASSWORD}
+    display_name: 系统管理员
   # 全局文件沙箱：内置工具、run_code、网页文件浏览、exec 等均只能访问下方 mcp 允许目录
   filesystem_sandbox: true
+
+# 团队文件工作区（部署在 A 机；内网用户通过网页访问此目录）
+workspace:
+  enabled: true
+  # 实际目录为项目下 data/workspace/
+  #   shared/     全员共享
+  #   users/<id>/ 每账号独立文件夹
 
 audit:
   enabled: true

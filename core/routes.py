@@ -5,9 +5,13 @@ import json
 import datetime
 import time
 import uuid
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Query, HTTPException, UploadFile, File
+from fastapi import APIRouter, Query, HTTPException, UploadFile, File, Depends, Request
+
+from core.security.deps import get_current_user, get_current_user_optional
+from core.security.users import CurrentUser, user_session_key, parse_session_conversation_id
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -174,7 +178,8 @@ def knowledge_stats():
     }
 
 
-# ──────────── 文件浏览接口 ────────────
+# ──────────── 文件浏览接口（团队工作区） ────────────
+
 
 def _format_size(size: int) -> str:
     for unit in ["B", "KB", "MB", "GB"]:
@@ -184,17 +189,93 @@ def _format_size(size: int) -> str:
     return f"{size:.1f}TB"
 
 
-@router.get("/files/list")
-def list_files(
-    path: str = Query("", description="文件夹路径"),
-):
-    """列出目录内容"""
+def _files_check_path(
+    request: Request,
+    path: str,
+    user: CurrentUser | None,
+    **kwargs,
+) -> str:
+    from core.workspace import (
+        use_workspace_for_user,
+        check_workspace_path,
+        default_list_path,
+    )
     from core.path_policy import check_path, default_browse_path
-    if not path:
-        path = default_browse_path()
-    path, err = check_path(path, must_exist=True, must_be_dir=True)
+
+    u = user or get_current_user_optional(request)
+    if use_workspace_for_user(u):
+        if not path:
+            path = default_list_path(u)
+        resolved, err = check_workspace_path(path, u, **kwargs)
+    else:
+        if not path:
+            path = default_browse_path()
+        resolved, err = check_path(path, **kwargs)
     if err:
         raise HTTPException(403, err.replace("错误：", ""))
+    return resolved
+
+
+def _enrich_dir_item(name: str, full: str, is_dir: bool) -> dict:
+    extra: dict = {}
+    if is_dir:
+        from core.workspace import users_root
+
+        try:
+            if Path(full).resolve().parent.resolve() == users_root().resolve():
+                row = get_db().get_user_by_id(name)
+                if row:
+                    extra["owner_username"] = row.get("username")
+                    extra["owner_display"] = row.get("display_name") or row.get("username")
+                    extra["label"] = extra["owner_display"]
+        except Exception:
+            pass
+    return extra
+
+
+@router.get("/files/roots")
+def file_workspace_roots(
+    request: Request,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """工作区入口：共享 / 我的 /（管理员）全部用户。"""
+    from core.workspace import list_roots, use_workspace_for_user, path_display
+
+    if not use_workspace_for_user(user):
+        from core.path_policy import get_allowed_roots, is_sandbox_enabled
+        import string
+
+        if is_sandbox_enabled():
+            roots = get_allowed_roots()
+            return {
+                "mode": "legacy",
+                "roots": [
+                    {"id": "root", "name": p.name or str(p), "path": str(p), "can_write": True}
+                    for p in roots
+                ],
+            }
+        drives = []
+        for letter in string.ascii_uppercase:
+            drive = f"{letter}:\\"
+            if os.path.exists(drive):
+                drives.append({"id": drive, "name": drive, "path": drive, "can_write": True})
+        return {"mode": "legacy", "roots": drives}
+
+    return {"mode": "workspace", "roots": list_roots(user)}
+
+
+@router.get("/files/list")
+def list_files(
+    request: Request,
+    path: str = Query("", description="文件夹路径"),
+    user: CurrentUser | None = Depends(get_current_user_optional),
+):
+    """列出目录内容"""
+    from core.workspace import use_workspace_for_user, path_display, can_write
+
+    path = _files_check_path(
+        request, path, user, must_exist=True, must_be_dir=True
+    )
     try:
         from core.security.audit import audit_file_access
         audit_file_access(path, "list", tool_name="api_files_list")
@@ -214,7 +295,7 @@ def list_files(
                 stat = os.stat(full)
                 is_dir = os.path.isdir(full)
                 ext = os.path.splitext(name)[1].lower() if not is_dir else ""
-                items.append({
+                row = {
                     "name": name,
                     "path": full,
                     "is_dir": is_dir,
@@ -225,7 +306,11 @@ def list_files(
                     ).strftime("%Y-%m-%d %H:%M"),
                     "ext": ext,
                     "is_supported": is_supported(full) if not is_dir else False,
-                })
+                }
+                row.update(_enrich_dir_item(name, full, is_dir))
+                if row.get("label"):
+                    row["name"] = row["label"]
+                items.append(row)
             except Exception:
                 items.append({
                     "name": name,
@@ -239,27 +324,64 @@ def list_files(
                 })
 
         parent = os.path.dirname(path) if path != os.path.dirname(path) else ""
-        return {
+        u = user or get_current_user_optional(request)
+        if u and use_workspace_for_user(u):
+            from core.workspace import (
+                shared_dir,
+                users_root,
+                user_dir as ws_user_dir,
+                workspace_root,
+            )
+
+            if path.rstrip("\\/") == str(shared_dir()).rstrip("\\/"):
+                parent = ""
+            elif path.rstrip("\\/") == str(ws_user_dir(u.id)).rstrip("\\/"):
+                parent = ""
+            elif not u.is_admin:
+                wr = str(workspace_root())
+                ur = str(users_root())
+                if parent.rstrip("\\/") in (wr, ur):
+                    parent = ""
+        payload = {
             "path": path,
             "parent": parent,
             "items": items,
             "total": len(items),
         }
+        if use_workspace_for_user(u):
+            payload["mode"] = "workspace"
+            payload["display_path"] = path_display(path, u)
+            payload["can_write"] = can_write(Path(path), u)
+            payload["can_upload"] = payload["can_write"] and os.path.isdir(path)
+        return payload
     except PermissionError:
         raise HTTPException(403, f"无权限访问: {path}")
 
 
 @router.get("/files/drives")
-def list_drives():
-    """列出可浏览根目录（沙箱开启时仅为允许目录）"""
+def list_drives(request: Request, user: CurrentUser | None = Depends(get_current_user_optional)):
+    """兼容旧前端：返回工作区 roots 或盘符。"""
+    from core.workspace import use_workspace_for_user, list_roots
+
+    u = user or get_current_user_optional(request)
+    if use_workspace_for_user(u):
+        roots = list_roots(u)
+        return {
+            "mode": "workspace",
+            "drives": [
+                {"name": r["name"], "path": r["path"], "label": r["name"], "id": r["id"]}
+                for r in roots
+            ],
+        }
     from core.path_policy import get_allowed_roots, is_sandbox_enabled
     if is_sandbox_enabled():
         roots = get_allowed_roots()
         return {
+            "mode": "legacy",
             "drives": [
                 {"name": p.name or str(p), "path": str(p), "label": str(p)}
                 for p in roots
-            ]
+            ],
         }
     import string
     drives = []
@@ -267,16 +389,17 @@ def list_drives():
         drive = f"{letter}:\\"
         if os.path.exists(drive):
             drives.append({"name": drive, "path": drive, "label": drive})
-    return {"drives": drives}
+    return {"mode": "legacy", "drives": drives}
 
 
 @router.get("/files/info")
-def file_info(path: str = Query(...)):
+def file_info(
+    request: Request,
+    path: str = Query(...),
+    user: CurrentUser | None = Depends(get_current_user_optional),
+):
     """获取文件信息"""
-    from core.path_policy import check_path
-    path, err = check_path(path, must_exist=True)
-    if err:
-        raise HTTPException(403, err.replace("错误：", ""))
+    path = _files_check_path(request, path, user, must_exist=True)
     if not os.path.exists(path):
         raise HTTPException(404, "文件不存在")
 
@@ -304,14 +427,15 @@ def file_info(path: str = Query(...)):
 
 
 @router.post("/files/open")
-def open_file(path: str = Query(...)):
-    """用系统默认程序打开文件"""
+def open_file(
+    request: Request,
+    path: str = Query(...),
+    user: CurrentUser | None = Depends(get_current_user_optional),
+):
+    """用系统默认程序打开文件（在服务器 A 上打开）"""
     import subprocess
     import platform
-    from core.path_policy import check_path
-    path, err = check_path(path, must_exist=True, must_be_file=True)
-    if err:
-        raise HTTPException(403, err.replace("错误：", ""))
+    path = _files_check_path(request, path, user, must_exist=True, must_be_file=True)
     try:
         from core.security.audit import audit_file_access
         audit_file_access(path, "open", tool_name="api_files_open")
@@ -334,66 +458,225 @@ def open_file(path: str = Query(...)):
         raise HTTPException(500, f"打开文件失败: {str(e)[:200]}")
 
 
+class FilesMkdirRequest(BaseModel):
+    path: str = Field(..., description="父目录绝对路径")
+    name: str = Field(..., min_length=1, max_length=128)
+
+
+@router.post("/files/mkdir")
+def files_mkdir(
+    req: FilesMkdirRequest,
+    request: Request,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """在工作区当前目录下新建文件夹。"""
+    parent = _files_check_path(
+        request, req.path, user, must_exist=True, must_be_dir=True, write=True
+    )
+    safe = "".join(c for c in req.name.strip() if c not in '\\/:*?"<>|').strip()
+    if not safe:
+        raise HTTPException(400, "文件夹名称无效")
+    new_path = os.path.join(parent, safe)
+    if os.path.exists(new_path):
+        raise HTTPException(400, "文件夹已存在")
+    os.makedirs(new_path, exist_ok=False)
+    return {"status": "ok", "path": new_path, "name": safe}
+
+
+@router.post("/files/upload")
+async def files_upload(
+    request: Request,
+    path: str = Query(..., description="目标目录"),
+    file: UploadFile = File(...),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """上传文件到工作区目录（共享或自己的文件夹；管理员可上传到任意工作区路径）。"""
+    target_dir = _files_check_path(
+        request, path, user, must_exist=True, must_be_dir=True, write=True
+    )
+    original_name = file.filename or "upload"
+    safe_name = "".join(
+        c for c in os.path.basename(original_name) if c not in '\\/:*?"<>|'
+    ).strip() or "upload"
+    save_path = os.path.join(target_dir, safe_name)
+    if os.path.exists(save_path):
+        base, ext = os.path.splitext(safe_name)
+        save_path = os.path.join(target_dir, f"{base}_{uuid.uuid4().hex[:6]}{ext}")
+
+    try:
+        content = await file.read()
+        with open(save_path, "wb") as f:
+            f.write(content)
+        try:
+            from core.security.audit import audit_file_access
+            audit_file_access(save_path, "upload", tool_name="api_files_upload")
+        except Exception:
+            pass
+        size = len(content)
+        ext = os.path.splitext(safe_name)[1].lower()
+        return {
+            "status": "ok",
+            "file_name": original_name,
+            "file_path": save_path,
+            "size": size,
+            "size_str": _format_size(size),
+            "ext": ext,
+            "is_supported": is_supported(save_path),
+        }
+    except Exception as e:
+        raise HTTPException(500, f"上传失败: {str(e)[:200]}")
+
+
 # ──────────── 对话管理接口 ────────────
 
 
-@router.get("/conversations")
-def list_conversations():
-    """列出所有对话（合并旧数据库 + nanobot 会话文件）"""
-    db = get_db()
-    convs = db.list_conversations(limit=50)
+def _format_conv_timestamps(convs: list[dict]) -> None:
     for c in convs:
-        c["created_at"] = datetime.datetime.fromtimestamp(
-            c["created_at"]
-        ).strftime("%Y-%m-%d %H:%M")
-        c["updated_at"] = datetime.datetime.fromtimestamp(
-            c["updated_at"]
-        ).strftime("%Y-%m-%d %H:%M")
+        if isinstance(c.get("created_at"), (int, float)):
+            c["created_at"] = datetime.datetime.fromtimestamp(c["created_at"]).strftime(
+                "%Y-%m-%d %H:%M"
+            )
+        if isinstance(c.get("updated_at"), (int, float)):
+            c["updated_at"] = datetime.datetime.fromtimestamp(c["updated_at"]).strftime(
+                "%Y-%m-%d %H:%M"
+            )
 
-    # 合并 nanobot 会话文件（从磁盘读取）
+
+def _merge_all_nanobot_conversations_for_admin(
+    convs: list[dict],
+    owner_filter: str | None = None,
+) -> None:
+    """管理员：合并所有 user:{uid}:{conv} 的 nanobot 会话。"""
     try:
         from nanobot.session.manager import SessionManager
         from pathlib import Path
+
         sm = SessionManager(Path(__file__).resolve().parent.parent)
+        users_by_id = {u["id"]: u for u in get_db().list_users()}
         for info in sm.list_sessions():
             key = info.get("key", "")
-            if key and not any(c.get("id") == key for c in convs):
-                data = sm.read_session_file(key)
-                msgs = data.get("messages", []) if data else []
-                first_content = msgs[0].get("content", "")[:30] if msgs else key
-                convs.append({
-                    "id": key,
-                    "title": first_content[:50],
-                    "created_at": info.get("created_at", ""),
-                    "updated_at": info.get("updated_at", ""),
-                    "message_count": len(msgs),
-                })
+            if not key.startswith("user:"):
+                continue
+            parts = key.split(":", 2)
+            if len(parts) < 3:
+                continue
+            uid, conv_id = parts[1], parts[2]
+            if owner_filter and uid != owner_filter:
+                continue
+            if any(c.get("id") == conv_id and c.get("owner_user_id") == uid for c in convs):
+                continue
+            data = sm.read_session_file(key)
+            msgs = data.get("messages", []) if data else []
+            first = msgs[0].get("content", "")[:30] if msgs else conv_id
+            owner = users_by_id.get(uid)
+            convs.append({
+                "id": conv_id,
+                "title": first[:50],
+                "created_at": info.get("created_at", ""),
+                "updated_at": info.get("updated_at", ""),
+                "message_count": len(msgs),
+                "owner_user_id": uid,
+                "owner_username": owner["username"] if owner else "",
+                "owner_display_name": (owner.get("display_name") or owner["username"]) if owner else "",
+            })
     except Exception:
         pass
 
+
+def _merge_user_nanobot_sessions(convs: list[dict], user: CurrentUser) -> None:
+    if user.id in ("anonymous", "localhost", "service"):
+        return
+    prefix = f"user:{user.id}:"
+    try:
+        from nanobot.session.manager import SessionManager
+        from pathlib import Path
+
+        sm = SessionManager(Path(__file__).resolve().parent.parent)
+        for info in sm.list_sessions():
+            key = info.get("key", "")
+            if not key.startswith(prefix):
+                continue
+            conv_id = parse_session_conversation_id(key, user.id) or key
+            if any(c.get("id") == conv_id for c in convs):
+                continue
+            data = sm.read_session_file(key)
+            msgs = data.get("messages", []) if data else []
+            first_content = msgs[0].get("content", "")[:30] if msgs else conv_id
+            convs.append({
+                "id": conv_id,
+                "title": first_content[:50],
+                "created_at": info.get("created_at", ""),
+                "updated_at": info.get("updated_at", ""),
+                "message_count": len(msgs),
+                "owner_user_id": user.id,
+            })
+    except Exception:
+        pass
+
+
+def _assert_conv_access(conv_id: str, user: CurrentUser) -> None:
+    if user.is_admin:
+        return
+    db = get_db()
+    conv = db.get_conversation(conv_id)
+    if conv:
+        owner = conv.get("owner_user_id")
+        if owner and owner != user.id and not user.is_admin:
+            raise HTTPException(403, "无权访问该对话")
+        if owner is None and user.id not in ("service", "localhost", "anonymous"):
+            raise HTTPException(403, "无权访问该对话")
+        return
+    if user.id in ("anonymous", "localhost", "service"):
+        return
+    sk = user_session_key(user.id, conv_id)
+    try:
+        from nanobot.session.manager import SessionManager
+        from pathlib import Path
+
+        sm = SessionManager(Path(__file__).resolve().parent.parent)
+        if sm.read_session_file(sk) or sm.read_session_file(conv_id):
+            return
+    except Exception:
+        pass
+    raise HTTPException(404, "对话不存在")
+
+
+@router.get("/conversations")
+def list_conversations(user: CurrentUser = Depends(get_current_user)):
+    """列出当前用户自己的对话。"""
+    db = get_db()
+    if user.id in ("anonymous", "localhost", "service"):
+        convs = db.list_conversations(limit=50)
+    else:
+        convs = db.list_conversations(limit=50, owner_user_id=user.id)
+    _format_conv_timestamps(convs)
+    _merge_user_nanobot_sessions(convs, user)
     return {"conversations": convs}
 
 
 @router.get("/conversations/{conv_id}")
-def get_conversation(conv_id: str):
-    """获取对话消息（先查数据库，再查nanobot会话文件）"""
+def get_conversation(conv_id: str, user: CurrentUser = Depends(get_current_user)):
+    """获取对话消息（仅本人；管理员请用 /api/admin/conversations）"""
+    _assert_conv_access(conv_id, user)
     db = get_db()
     conv = db.get_conversation(conv_id)
     if conv:
         messages = db.get_messages(conv_id)
         return {"conversation": conv, "messages": messages}
-    # 从 nanobot 会话文件读取
+    sk = user_session_key(user.id, conv_id)
     try:
         from nanobot.session.manager import SessionManager
         from pathlib import Path
+
         sm = SessionManager(Path(__file__).resolve().parent.parent)
-        data = sm.read_session_file(conv_id)
-        if data:
-            msgs = data.get("messages", [])
-            return {
-                "conversation": {"id": conv_id, "title": conv_id, "messages": len(msgs)},
-                "messages": msgs,
-            }
+        for key in (sk, conv_id):
+            data = sm.read_session_file(key)
+            if data:
+                msgs = data.get("messages", [])
+                return {
+                    "conversation": {"id": conv_id, "title": conv_id, "messages": len(msgs)},
+                    "messages": msgs,
+                }
     except Exception:
         pass
     raise HTTPException(404, "对话不存在")
@@ -406,15 +689,19 @@ def load_conversation(conv_id: str, session_id: str = ""):
 
 
 @router.delete("/conversations/{conv_id}")
-def delete_conversation(conv_id: str):
+def delete_conversation(conv_id: str, user: CurrentUser = Depends(get_current_user)):
     """删除对话（数据库 + nanobot session文件）"""
+    _assert_conv_access(conv_id, user)
     db = get_db()
     db.delete_conversation(conv_id)
     try:
         from nanobot.session.manager import SessionManager
         from pathlib import Path
+
         sm = SessionManager(Path(__file__).resolve().parent.parent)
         sm.delete_session(conv_id)
+        if user.id not in ("anonymous", "localhost", "service"):
+            sm.delete_session(user_session_key(user.id, conv_id))
     except Exception:
         pass
     return {"status": "ok", "message": "对话已删除"}
@@ -423,8 +710,12 @@ def delete_conversation(conv_id: str):
 # ──────────── 设置接口 ────────────
 
 
+def _user_pref_key(user_id: str, name: str) -> str:
+    return f"user:{user_id}:{name}"
+
+
 @router.get("/settings")
-def get_settings():
+def get_settings(request: Request):
     """从 config.yaml + DB 读取所有设置"""
     from ruamel.yaml import YAML
 
@@ -487,6 +778,12 @@ def get_settings():
     for k in ("work_corp_id", "work_agent_id", "work_secret"):
         if k in db_settings:
             mapped[k] = db_settings[k]
+
+    user = getattr(request.state, "user", None)
+    if user and user.id not in ("anonymous", "localhost", "service"):
+        pref = db_settings.get(_user_pref_key(user.id, "icon_theme"))
+        if pref:
+            mapped["icon_theme"] = pref
 
     return {"config": config, "db_settings": mapped}
 
@@ -569,7 +866,7 @@ def _set_nested(d: dict, keys: list[str], value) -> None:
 
 
 @router.post("/settings")
-def update_settings(req: SettingsUpdate):
+def update_settings(req: SettingsUpdate, request: Request):
     """保存设置：模型/知识库配置写入 config.yaml，企业微信写入 DB"""
     from ruamel.yaml import YAML
 
@@ -579,9 +876,16 @@ def update_settings(req: SettingsUpdate):
     config_updates = {}
     db_updates = {}
 
+    user = getattr(request.state, "user", None)
     for key, value in req.settings.items():
         if key in _CONFIG_KEY_MAP:
             config_updates[key] = value
+        elif key == "icon_theme" and user and user.id not in (
+            "anonymous",
+            "localhost",
+            "service",
+        ):
+            db_updates[_user_pref_key(user.id, "icon_theme")] = str(value)
         else:
             db_updates[key] = value
 

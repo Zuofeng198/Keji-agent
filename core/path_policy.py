@@ -36,9 +36,44 @@ def get_allowed_roots(config: dict | None = None, project_root: Path | None = No
     if config is None:
         config = _load_config()
     root = project_root or _project_root()
+    try:
+        from core.security.permissions import resolve_current_user
+        from core.workspace import (
+            ensure_layout,
+            is_workspace_enabled,
+            shared_dir,
+            use_workspace_for_user,
+            user_dir,
+            workspace_root,
+        )
+
+        user = resolve_current_user()
+        if user and use_workspace_for_user(user):
+            ensure_layout()
+            if user.is_admin:
+                dirs = [workspace_root()]
+                if is_sandbox_enabled(config):
+                    for p in resolve_filesystem_allowed_dirs(config, root):
+                        if not any(str(p).lower() == str(d).lower() for d in dirs):
+                            dirs.append(p)
+                return dirs
+            return [shared_dir(), user_dir(user.id)]
+    except Exception:
+        pass
     if not is_sandbox_enabled(config):
         return []
-    return resolve_filesystem_allowed_dirs(config, root)
+    dirs = list(resolve_filesystem_allowed_dirs(config, root))
+    try:
+        from core.workspace import is_workspace_enabled, policy_roots, ensure_layout
+
+        if is_workspace_enabled(config):
+            ensure_layout()
+            ws = policy_roots()[0]
+            if not any(str(ws).lower() == str(d).lower() for d in dirs):
+                dirs.append(ws)
+    except Exception:
+        pass
+    return dirs
 
 
 def is_under(path: Path, root: Path) -> bool:
@@ -67,9 +102,28 @@ def assert_path_allowed(
     must_exist: bool = False,
     must_be_dir: bool = False,
     must_be_file: bool = False,
+    write: bool = False,
 ) -> Path:
     """校验路径在允许目录下；通过则返回绝对路径。"""
     resolved = resolve_user_path(path, project_root)
+    try:
+        from core.security.permissions import resolve_current_user
+        from core.workspace import use_workspace_for_user, assert_access as ws_assert
+
+        user = resolve_current_user()
+        if user and use_workspace_for_user(user):
+            return ws_assert(
+                str(resolved),
+                user,
+                must_exist=must_exist,
+                must_be_dir=must_be_dir,
+                must_be_file=must_be_file,
+                write=write,
+            )
+    except Exception as e:
+        if isinstance(e, PermissionError):
+            raise PathPolicyError(str(e)) from e
+        raise
     roots = get_allowed_roots(config, project_root)
     if roots and not any(is_under(resolved, r) for r in roots):
         allowed_hint = "、".join(str(r) for r in roots[:5])
@@ -114,6 +168,18 @@ def format_allowed_directories_text(
     """供系统提示或工具返回的人类可读目录列表。"""
     if config is None:
         config = _load_config()
+    try:
+        from core.security.permissions import resolve_current_user, role_permission_hint
+        from core.workspace import use_workspace_for_user
+
+        user = resolve_current_user()
+        if user and use_workspace_for_user(user):
+            roots = get_allowed_roots(config, project_root)
+            lines = "\n".join(f"- {p}" for p in roots)
+            hint = role_permission_hint(user)
+            return f"允许访问的目录（共 {len(roots)} 个）：\n{lines}\n{hint}"
+    except Exception:
+        pass
     if not is_sandbox_enabled(config):
         return "文件沙箱已关闭：可访问本机任意路径（仍受操作系统权限限制）。"
     roots = get_allowed_roots(config, project_root)

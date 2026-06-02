@@ -1073,7 +1073,7 @@ def format_data(data: str, operation: str = "head", params: str = "5") -> str:
     timeout=10,
 )
 def create_folder(path: str) -> str:
-    path, err = check_path(path, project_root=_PROJECT_ROOT)
+    path, err = check_path(path, project_root=_PROJECT_ROOT, write=True)
     if err:
         return err
     try:
@@ -1105,7 +1105,9 @@ def delete_file(path: str, confirm: bool = False) -> str:
     import shutil
     import stat
 
-    path, err = check_path(path, project_root=_PROJECT_ROOT, must_exist=True, must_be_file=True)
+    path, err = check_path(
+        path, project_root=_PROJECT_ROOT, must_exist=True, must_be_file=True, write=True
+    )
     if err:
         return err
 

@@ -10,7 +10,17 @@ let currentReader = null;
 let debugEvents = [];        // 调试事件缓冲
 let debugActiveTab = 'events';
 
-// ── API 鉴权（与后端 security.api_key 一致）──
+// ── 登录态 / API Key（用户 JWT 优先）──
+window.kejiCurrentUser = null;
+window.kejiAuthReady = false;
+
+function getKejiToken() {
+  return localStorage.getItem('keji_token') || '';
+}
+function setKejiToken(token) {
+  if (token) localStorage.setItem('keji_token', token);
+  else localStorage.removeItem('keji_token');
+}
 function getKejiApiKey() {
   return localStorage.getItem('keji_api_key') || '';
 }
@@ -27,10 +37,16 @@ function kejiAuthHeaders(extra) {
       Object.assign(h, extra);
     }
   }
-  var key = getKejiApiKey();
-  if (key) {
-    h['Authorization'] = 'Bearer ' + key;
-    h['X-API-Key'] = key;
+  var token = getKejiToken();
+  if (token) {
+    h['Authorization'] = 'Bearer ' + token;
+  } else {
+    var key = getKejiApiKey();
+    // 勿把未替换的环境变量占位符或空串当作 API Key，否则会一直 401
+    if (key && key.indexOf('${') < 0 && key.length >= 8) {
+      h['Authorization'] = 'Bearer ' + key;
+      h['X-API-Key'] = key;
+    }
   }
   return h;
 }
@@ -38,13 +54,24 @@ function kejiFetch(url, options) {
   options = options || {};
   var headers = kejiAuthHeaders(options.headers);
   return fetch(url, Object.assign({}, options, { headers: headers })).then(function(res) {
-    if (res.status === 401 && !window._kejiAuthPrompted) {
-      window._kejiAuthPrompted = true;
-      var k = prompt('需要 API Key 才能访问科吉。请在设置中填写，或现在输入：', getKejiApiKey());
-      if (k) {
-        setKejiApiKey(k.trim());
-        window._kejiAuthPrompted = false;
-        return kejiFetch(url, options);
+    if (res.status === 401) {
+      var hadSession = !!window.kejiAuthReady && !window.kejiJustLoggedIn;
+      var isCoreAuth =
+        url.indexOf('/api/auth/me') >= 0 ||
+        url.indexOf('/api/admin/') >= 0;
+      if (hadSession && isCoreAuth) {
+        setKejiToken('');
+        window.kejiAuthReady = false;
+        window.kejiCurrentUser = null;
+        if (typeof showLoginOverlay === 'function') {
+          showLoginOverlay('登录已过期，请重新登录');
+        }
+      } else if (typeof showLoginOverlay === 'function') {
+        var overlay = document.getElementById('loginOverlay');
+        if (overlay && overlay.classList.contains('open')) {
+          var errEl = document.getElementById('loginError');
+          if (errEl && errEl.textContent.indexOf('过期') >= 0) errEl.textContent = '';
+        }
       }
     }
     return res;

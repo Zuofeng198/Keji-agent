@@ -14,9 +14,13 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from core.routes import router as api_router
+from core.routes_auth import router as auth_router
+from core.routes_admin import router as admin_router
 from core.routes_security import router as security_router
 from core.security.auth import APIKeyMiddleware, get_security_settings
 from core.security.context import clear_request_context, set_request_context
+from core.security.users import bootstrap_admin_if_needed
+from core.security.chat_session import resolve_chat_ids
 from core.wechat.work_bridge import router as work_router
 
 async def get_adapter():
@@ -28,10 +32,27 @@ async def get_adapter():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     sec = get_security_settings(reload=True)
+    bootstrap_admin_if_needed()
+    try:
+        from core.workspace import ensure_layout
+
+        from core.database.db import get_db
+        from core.workspace import ensure_user_dir
+
+        ws = ensure_layout()
+        for row in get_db().list_users():
+            ensure_user_dir(row["id"])
+        logger.info("团队文件工作区: {}", ws)
+    except Exception as e:
+        logger.warning("初始化文件工作区失败: {}", e)
     if sec.enabled:
-        logger.info("API 鉴权已启用（本地回环可配置免密钥）")
+        logger.info(
+            "鉴权已启用 mode={} localhost_skip={}",
+            sec.auth_mode,
+            sec.allow_localhost_without_auth,
+        )
     else:
-        logger.warning("API 鉴权未启用：请在 config.yaml 的 security 段配置 api_key")
+        logger.warning("API 鉴权未启用：请在 config.yaml 的 security 段配置")
     adapter = await get_adapter()
     # 启动飞书桥接层（如果配置了飞书渠道）
     await adapter.start_feishu_bridge()
@@ -44,19 +65,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="科吉 AI 助手", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.add_middleware(APIKeyMiddleware)
 app.include_router(api_router)
+app.include_router(auth_router)
+app.include_router(admin_router)
 app.include_router(security_router)
 app.include_router(work_router)
 
-
-@app.middleware("http")
-async def bind_request_context(request: Request, call_next):
-    """为审计日志关联客户端 IP。"""
-    client_ip = request.client.host if request.client else ""
-    set_request_context(client_ip=client_ip, actor="api")
-    try:
-        return await call_next(request)
-    finally:
-        clear_request_context()
 
 static_dir = os.path.join(os.path.dirname(__file__), "web")
 if os.path.isdir(static_dir):
@@ -112,24 +125,32 @@ def home():
 @app.post("/chat")
 async def chat(req: ChatRequest, request: Request):
     adapter = await get_adapter()
-    sid = req.conversation_id or req.session_id or uuid.uuid4().hex[:12]
+    sid, conv_id, user = resolve_chat_ids(
+        request, session_id=req.session_id, conversation_id=req.conversation_id
+    )
     set_request_context(
         session_id=sid,
         client_ip=request.client.host if request.client else "",
-        actor="api",
+        actor=user.username if user else "api",
+        user_id=user.id if user else "",
+        role=user.role if user else "",
     )
     reply = await adapter.chat(query=req.query, sid=sid, files=req.files or None)
-    return {"reply": reply, "session_id": sid, "conversation_id": req.conversation_id or sid}
+    return {"reply": reply, "session_id": sid, "conversation_id": conv_id}
 
 
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest, request: Request):
     adapter = await get_adapter()
-    sid = req.conversation_id or req.session_id or uuid.uuid4().hex[:12]
+    sid, conv_id, user = resolve_chat_ids(
+        request, session_id=req.session_id, conversation_id=req.conversation_id
+    )
     set_request_context(
         session_id=sid,
         client_ip=request.client.host if request.client else "",
-        actor="api",
+        actor=user.username if user else "api",
+        user_id=user.id if user else "",
+        role=user.role if user else "",
     )
 
     async def generate():
@@ -139,7 +160,7 @@ async def chat_stream(req: ChatRequest, request: Request):
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
-        headers={"X-Session-Id": sid, "X-Conversation-Id": sid},
+        headers={"X-Session-Id": sid, "X-Conversation-Id": conv_id},
     )
 
 
@@ -232,9 +253,15 @@ if __name__ == "__main__":
     import uvicorn
     try:
         print("🚀 科吉 AI 助手启动中...")
-        print("🌐 访问地址: http://127.0.0.1:8000")
+        print("🌐 访问地址: http://127.0.0.1:8000 （局域网请用本机 IP）")
     except UnicodeEncodeError:
         print("科吉 AI 助手启动中...")
         print("访问地址: http://127.0.0.1:8000")
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    host = os.environ.get("KEJI_HOST", "0.0.0.0")
+    port = int(os.environ.get("KEJI_PORT", "8000"))
+    try:
+        print(f"🌐 本机: http://127.0.0.1:{port}  局域网: http://<本机IP>:{port}")
+    except UnicodeEncodeError:
+        print(f"本机: http://127.0.0.1:{port}  局域网: http://<本机IP>:{port}")
+    uvicorn.run(app, host=host, port=port, log_level="info")

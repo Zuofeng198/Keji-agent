@@ -643,6 +643,9 @@ function switchPage(page) {
   if (page === 'settings') { setTimeout(function() {
     if (typeof loadAuditLogs === 'function') loadAuditLogs();
   }, 50); }
+  if (page === 'admin' && typeof loadAdminPage === 'function') {
+    setTimeout(loadAdminPage, 50);
+  }
 }
 
 function newChat() {

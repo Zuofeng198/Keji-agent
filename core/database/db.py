@@ -3,6 +3,7 @@ import json
 import os
 import threading
 import time
+import uuid
 from typing import Optional
 
 
@@ -174,36 +175,220 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(created_at);
             CREATE INDEX IF NOT EXISTS idx_audit_type ON audit_events(event_type, created_at);
             CREATE INDEX IF NOT EXISTS idx_audit_path ON audit_events(path);
+
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                role TEXT NOT NULL DEFAULT 'member'
+                    CHECK(role IN ('admin', 'member', 'readonly')),
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                last_login_at REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
         """)
         conn.commit()
+        self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        conn = self._get_conn()
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(conversations)").fetchall()}
+        if "owner_user_id" not in cols:
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN owner_user_id TEXT"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conv_owner "
+                "ON conversations(owner_user_id, updated_at)"
+            )
+            conn.commit()
+
+    # ---- 用户管理 ----
+
+    def count_users(self) -> int:
+        row = self._get_conn().execute("SELECT COUNT(*) AS c FROM users").fetchone()
+        return int(row["c"]) if row else 0
+
+    def get_user_by_username(self, username: str) -> Optional[dict]:
+        row = self._get_conn().execute(
+            "SELECT id, username, password_hash, display_name, role, is_active, "
+            "created_at, last_login_at FROM users WHERE username = ?",
+            (username.strip(),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_user_by_id(self, user_id: str) -> Optional[dict]:
+        row = self._get_conn().execute(
+            "SELECT id, username, password_hash, display_name, role, is_active, "
+            "created_at, last_login_at FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_users(self) -> list[dict]:
+        rows = self._get_conn().execute(
+            "SELECT id, username, display_name, role, is_active, created_at, last_login_at "
+            "FROM users ORDER BY created_at ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def create_user(
+        self,
+        username: str,
+        password_hash: str,
+        role: str = "member",
+        display_name: str = "",
+    ) -> str:
+        uid = uuid.uuid4().hex[:16]
+        now = time.time()
+        self._get_conn().execute(
+            "INSERT INTO users (id, username, password_hash, display_name, role, "
+            "is_active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
+            (uid, username.strip(), password_hash, display_name or username, role, now),
+        )
+        self._get_conn().commit()
+        return uid
+
+    def update_user(
+        self,
+        user_id: str,
+        *,
+        display_name: str | None = None,
+        role: str | None = None,
+        is_active: int | None = None,
+        password_hash: str | None = None,
+    ) -> bool:
+        user = self.get_user_by_id(user_id)
+        if not user:
+            return False
+        fields: list[str] = []
+        values: list = []
+        if display_name is not None:
+            fields.append("display_name = ?")
+            values.append(display_name)
+        if role is not None:
+            fields.append("role = ?")
+            values.append(role)
+        if is_active is not None:
+            fields.append("is_active = ?")
+            values.append(int(is_active))
+        if password_hash is not None:
+            fields.append("password_hash = ?")
+            values.append(password_hash)
+        if not fields:
+            return True
+        values.append(user_id)
+        self._get_conn().execute(
+            f"UPDATE users SET {', '.join(fields)} WHERE id = ?",
+            values,
+        )
+        self._get_conn().commit()
+        return True
+
+    def touch_user_login(self, user_id: str) -> None:
+        self._get_conn().execute(
+            "UPDATE users SET last_login_at = ? WHERE id = ?",
+            (time.time(), user_id),
+        )
+        self._get_conn().commit()
+
+    def user_to_public(self, row: dict) -> dict:
+        return {
+            "id": row["id"],
+            "username": row["username"],
+            "display_name": row.get("display_name") or row["username"],
+            "role": row["role"],
+            "is_active": bool(row.get("is_active", 1)),
+            "created_at": row.get("created_at"),
+            "last_login_at": row.get("last_login_at"),
+        }
 
     # ---- 对话管理 ----
 
-    def create_conversation(self, conv_id: str, title: str = "新对话") -> dict:
+    def create_conversation(
+        self,
+        conv_id: str,
+        title: str = "新对话",
+        owner_user_id: str | None = None,
+    ) -> dict:
         now = time.time()
         conn = self._get_conn()
         conn.execute(
-            "INSERT OR IGNORE INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
-            (conv_id, title, now, now),
+            "INSERT OR IGNORE INTO conversations "
+            "(id, title, created_at, updated_at, owner_user_id) VALUES (?, ?, ?, ?, ?)",
+            (conv_id, title, now, now, owner_user_id),
         )
+        if owner_user_id:
+            conn.execute(
+                "UPDATE conversations SET owner_user_id = ? WHERE id = ? AND owner_user_id IS NULL",
+                (owner_user_id, conv_id),
+            )
         conn.commit()
-        return {"id": conv_id, "title": title, "created_at": now}
+        return {"id": conv_id, "title": title, "created_at": now, "owner_user_id": owner_user_id}
 
-    def list_conversations(self, limit: int = 50) -> list[dict]:
+    def ensure_conversation_owned(
+        self, conv_id: str, owner_user_id: str, title: str = "新对话"
+    ) -> dict:
+        self.create_conversation(conv_id, title=title, owner_user_id=owner_user_id)
+        conv = self.get_conversation(conv_id)
+        if conv and title and conv.get("title") in ("新对话", conv_id) and title != "新对话":
+            self.rename_conversation(conv_id, title)
+        return conv or {"id": conv_id}
+
+    def delete_user(self, user_id: str) -> bool:
         conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT id, title, created_at, updated_at, message_count FROM conversations ORDER BY updated_at DESC LIMIT ?",
-            (limit,),
+        convs = conn.execute(
+            "SELECT id FROM conversations WHERE owner_user_id = ?",
+            (user_id,),
         ).fetchall()
+        for row in convs:
+            cid = row["id"]
+            conn.execute("DELETE FROM messages WHERE conversation_id = ?", (cid,))
+            conn.execute("DELETE FROM conversations WHERE id = ?", (cid,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+        return True
+
+    def list_conversations(
+        self,
+        limit: int = 50,
+        owner_user_id: str | None = None,
+    ) -> list[dict]:
+        conn = self._get_conn()
+        if owner_user_id is not None:
+            rows = conn.execute(
+                "SELECT id, title, created_at, updated_at, message_count, owner_user_id "
+                "FROM conversations WHERE owner_user_id = ? "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (owner_user_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, title, created_at, updated_at, message_count, owner_user_id "
+                "FROM conversations ORDER BY updated_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
         return [dict(r) for r in rows]
 
     def get_conversation(self, conv_id: str) -> Optional[dict]:
         conn = self._get_conn()
         row = conn.execute(
-            "SELECT id, title, created_at, updated_at, message_count FROM conversations WHERE id = ?",
+            "SELECT id, title, created_at, updated_at, message_count, owner_user_id "
+            "FROM conversations WHERE id = ?",
             (conv_id,),
         ).fetchone()
         return dict(row) if row else None
+
+    def conversation_owned_by(self, conv_id: str, user_id: str) -> bool:
+        conv = self.get_conversation(conv_id)
+        if not conv:
+            return True
+        owner = conv.get("owner_user_id")
+        if not owner:
+            return False
+        return owner == user_id
 
     def delete_conversation(self, conv_id: str):
         conn = self._get_conn()

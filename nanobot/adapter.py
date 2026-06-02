@@ -335,6 +335,41 @@ class SSEHook(AgentHook):
             await self.q.put(json.dumps({"phase": "think_token", "token": msg}, ensure_ascii=False))
 
 
+class RolePermissionHook(AgentHook):
+    """按登录角色拦截写入类工具（只读账号仅查询/读文件）。"""
+
+    @staticmethod
+    def _tool_name(tc) -> str:
+        if tc.name == "__tool__":
+            args = tc.arguments or {}
+            return str(args.get("tool", "") or "")
+        return tc.name or ""
+
+    async def before_execute_tools(self, ctx: AgentHookContext) -> None:
+        from core.security.permissions import resolve_current_user, tool_allowed_for_user
+
+        user = resolve_current_user()
+        if not user or user.is_admin:
+            return
+        kept = []
+        blocked: list[str] = []
+        for tc in ctx.tool_calls:
+            name = self._tool_name(tc)
+            if tool_allowed_for_user(name, user):
+                kept.append(tc)
+            else:
+                blocked.append(name or tc.name)
+        if blocked:
+            ctx.tool_calls = kept
+            msg = (
+                f"账号「{user.display_name or user.username}」为只读权限，"
+                f"已阻止写入类工具: {', '.join(blocked)}。"
+                "请改用读取、检索、分析类能力，或请管理员处理文件变更。"
+            )
+            pos = 1 if (ctx.messages and ctx.messages[0].get("role") == "system") else 0
+            ctx.messages.insert(pos, {"role": "system", "content": f"[权限限制]\n\n{msg}"})
+
+
 class ComplianceHook(AgentHook):
     """自动执行自检和验证提醒 — 在复杂工具执行前注入健康报告。
 
@@ -639,6 +674,14 @@ class _LazyTool(Tool):
             args = {}
         if not actual:
             return "错误：请指定 tool 参数"
+        from core.security.permissions import resolve_current_user, tool_allowed_for_user
+
+        user = resolve_current_user()
+        if user and not tool_allowed_for_user(actual, user):
+            return (
+                f"错误：当前账号（{user.role}）无权使用写入类工具「{actual}」。"
+                "只读账号仅可查询与读取；成员可读写共享目录与个人目录；管理员无此限制。"
+            )
         t = self._registry.get(actual)
         if not t:
             return f"错误：工具 '{actual}' 不存在"
@@ -1029,6 +1072,15 @@ class KejiAdapter:
                 "查询完整列表可调用工具 `list_allowed_directories`（优先于 MCP 同名工具）。"
                 "列目录请使用绝对路径或 `knowledge`/`data` 等相对路径，勿对 `glob` 使用 `.`（表示项目根，可能越界）。"
             )
+        try:
+            from core.security.permissions import resolve_current_user, role_permission_hint
+
+            _u = resolve_current_user()
+            _rh = role_permission_hint(_u)
+            if _rh:
+                sys_prompt += f"\n\n## 当前账号权限\n{_rh}\n"
+        except Exception:
+            pass
         msgs = [{"role": "system", "content": sys_prompt}]
 
         # 新会话自动填充默认技能
@@ -1068,19 +1120,33 @@ class KejiAdapter:
         msgs.append({"role": "user", "content": content})
         return msgs, sid or "cli:default"
 
+    @staticmethod
+    def _merge_request_context(session_id: str) -> None:
+        from core.security.context import get_request_context, set_request_context
+
+        ctx = get_request_context()
+        set_request_context(
+            session_id=session_id or ctx.session_id,
+            actor=ctx.actor or "api",
+            client_ip=ctx.client_ip,
+            user_id=ctx.user_id,
+            role=ctx.role,
+        )
+
     async def chat(self, query: str, sid: str = "", files: list[str] | None = None) -> str:
-        from core.security.context import set_request_context
         sk_pre = sid or "cli:default"
         await self._prepare_session_for_chat(sk_pre)
         msgs, sk = self._build_msgs(query, sid, files)
-        set_request_context(session_id=sk, actor="api")
+        self._merge_request_context(sk)
         runner = AgentRunner(self.provider)
         agent_cfg = self.config.get("agent", {})
         cost_cb = self._make_cost_callback(sk)
+        role_hook = RolePermissionHook()
+        compliance = ComplianceHook(self.tools, self.project_root, self.config)
         r = await runner.run(AgentRunSpec(
             initial_messages=msgs, tools=self.lazy_tools, model=self.model,
             max_iterations=self.max_iterations, max_tool_result_chars=self.max_tool_result_chars,
-            hook=ComplianceHook(self.tools, self.project_root, self.config),
+            hook=CompositeHook([role_hook, compliance]),
             tool_timeout_s=agent_cfg.get("tool_timeout", 120),
             tool_max_retries=agent_cfg.get("tool_max_retries", 2),
             tool_retry_backoff=agent_cfg.get("tool_retry_backoff", 2),
@@ -1098,31 +1164,23 @@ class KejiAdapter:
                     import json as _j
                     _tc_json = _j.dumps(m["tool_calls"], ensure_ascii=False)
                 break
-        try:
-            s = self.session_manager.get_or_create(sk)
-            s.add_message("user", query)
-            s.add_message("assistant", reply,
-                usage=_ensure_usage(r.usage, self.provider, self.model, msgs,
-                                    self.lazy_tools.get_definitions(), reply,
-                                    reasoning_content=_reasoning, tool_calls_json=_tc_json))
-            self.session_manager.save(s)
-        except Exception as e:
-            logger.warning("Save session: {}", e)
+        from core.chat_persist import persist_chat_turn
+        persist_chat_turn(self.session_manager, sk, query, r, thinking="")
         return reply
 
     async def chat_stream(self, query: str, sid: str = "", files: list[str] | None = None) -> AsyncGenerator[str, None]:
-        from core.security.context import set_request_context
         sk_pre = sid or "cli:default"
         compact_note = await self._prepare_session_for_chat(sk_pre)
         msgs, sk = self._build_msgs(query, sid, files)
-        set_request_context(session_id=sk, actor="api")
+        self._merge_request_context(sk)
         q: asyncio.Queue[str] = asyncio.Queue()
         if compact_note:
             await q.put(json.dumps({"phase": "system_notice", "message": compact_note}, ensure_ascii=False))
         done = asyncio.Event()
         sse_hook = SSEHook(q)
+        role_hook = RolePermissionHook()
         compliance_hook = ComplianceHook(self.tools, self.project_root, self.config, sse_hook=sse_hook)
-        hook = CompositeHook([sse_hook, compliance_hook])
+        hook = CompositeHook([sse_hook, role_hook, compliance_hook])
 
         cost_cb = self._make_cost_callback(sk)
         async def run():
@@ -1132,8 +1190,9 @@ class KejiAdapter:
             if len(self._cancel_events) > 100:
                 self._cancel_events.clear()
             reply = ""
+            run_result = None
             try:
-                r = await AgentRunner(self.provider).run(AgentRunSpec(
+                run_result = await AgentRunner(self.provider).run(AgentRunSpec(
                     initial_messages=msgs, tools=self.lazy_tools, model=self.model,
                     max_iterations=self.max_iterations, max_tool_result_chars=self.max_tool_result_chars,
                     hook=hook,
@@ -1144,7 +1203,7 @@ class KejiAdapter:
                     cancel_event=cancel_ev,
                     cost_callback=cost_cb,
                 ))
-                reply = r.final_content or ""
+                reply = run_result.final_content or ""
                 if reply:
                     for i in range(0, len(reply), 2):
                         await q.put(json.dumps({"phase": "answer", "token": reply[i:i+2]}, ensure_ascii=False))
@@ -1152,27 +1211,17 @@ class KejiAdapter:
             except Exception as e:
                 await q.put(json.dumps({"phase": "error", "message": str(e)[:200]}, ensure_ascii=False))
             finally:
-                # 清理取消事件
                 self._cancel_events.pop(sk, None)
-                if reply:
-                    try:
-                        s = self.session_manager.get_or_create(sk)
-                        s.add_message("user", query)
-                        thinking = sse_hook.thinking_content.strip() if hasattr(sse_hook, 'thinking_content') else ""
-                        # 提取工具调用用于精确估算
-                        _tc_json = None
-                        for _m in reversed(r.messages or []):
-                            if _m.get("role") == "assistant" and _m.get("tool_calls"):
-                                import json as _j
-                                _tc_json = _j.dumps(_m["tool_calls"], ensure_ascii=False)
-                                break
-                        s.add_message("assistant", reply, thinking=thinking,
-                            usage=_ensure_usage(r.usage, self.provider, self.model, msgs,
-                                                self.lazy_tools.get_definitions(), reply,
-                                                reasoning_content=thinking, tool_calls_json=_tc_json))
-                        self.session_manager.save(s)
-                    except Exception:
-                        pass
+                if run_result is not None:
+                    from core.chat_persist import persist_chat_turn
+                    thinking = (
+                        sse_hook.thinking_content.strip()
+                        if hasattr(sse_hook, "thinking_content")
+                        else ""
+                    )
+                    persist_chat_turn(
+                        self.session_manager, sk, query, run_result, thinking=thinking
+                    )
                 done.set()
 
         asyncio.create_task(run())
