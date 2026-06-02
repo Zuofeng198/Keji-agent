@@ -29,8 +29,8 @@
 ### 1. 获取代码
 
 ```powershell
-git clone <你的仓库地址>
-cd 科吉agent
+git clone https://github.com/Zuofeng198/keji.git
+cd keji
 ```
 
 ### 2. 一键部署
