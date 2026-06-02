@@ -1,0 +1,15 @@
+【GitHub 仓库 About / Description 可粘贴的短文】
+
+Windows 本地/局域网 AI 助手：Web 对话、多用户与角色权限、团队文件工作区。Python 3.12 一键部署，依赖包已含（Git LFS）。
+
+【稍长 Description（若字数允许）】
+
+科吉 Agent：基于 FastAPI 的 Windows AI 助手，支持内网多用户、共享文件夹、管理员后台。克隆后 git lfs pull，运行 setup_deploy.bat 即可离线安装依赖。
+
+【建议 Topics】
+
+ai-agent, fastapi, deepseek, windows, multi-user, local-ai, chinese
+
+【Website 可填】
+
+留空或填文档： https://github.com/Zuofeng198/keji#readme

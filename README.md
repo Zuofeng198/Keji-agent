@@ -1,116 +1,163 @@
-# 科吉 Agent
+# 科吉 Agent (Keji)
 
-基于 FastAPI + nanobot 的本地/局域网 AI 助手：Web 对话、多用户登录、团队文件工作区、工具与 MCP 扩展。
+Windows 上的**本地 / 局域网 AI 助手**：浏览器打开即可对话，支持多账号、团队共享文件夹、管理员后台。适合办公室内网一台服务器、多人通过网页访问。
 
-## 功能概览
+**仓库地址：** https://github.com/Zuofeng198/keji
 
-- **对话**：流式聊天，按用户隔离会话与历史
-- **账号**：JWT 登录；角色 `admin` / `member` / `readonly`（工具与路径权限不同）
-- **团队文件**：`data/workspace/shared/` 共享目录，`data/workspace/users/<用户ID>/` 个人目录
-- **管理**：管理员可管理用户、查看会话
-- **工具**：文档、表格、知识库、代码执行、MCP（DuckDB/文件系统等，需 Node）
+---
 
-## 环境要求
+## 你能用它做什么
 
-| 组件 | 要求 |
-|------|------|
-| 系统 | Windows 10/11（64 位） |
-| Python | **3.10 或 3.11、3.12**（64 位）均可运行源码 |
-| 离线 wheel | 仓库已含 **Python 3.12** wheel（Git LFS），见下 |
-| Node.js | 可选 18+，完整 MCP 建议安装 |
+- 网页里和 AI 对话（流式回复，会话按用户保存）
+- **团队文件**：共享目录 + 每人独立目录，网页上传/浏览
+- **三种角色**：管理员 / 成员（可写自己+共享）/ 只读（仅读、不可用写入类工具）
+- 可选：Word/Excel、知识库检索、数据分析、MCP 工具（需 Node.js）
 
-### 关于 Python 3.10 / 3.12
+---
 
-- 从 GitHub **在线部署**：`setup_deploy.bat` 会用你本机已装的 Python（3.10～3.12 均可）联网安装依赖。
-- **离线 wheel** 在 `offline_packages/pip_wheels/`（**Git LFS**，约 400MB）。当前包为 **Python 3.12 / Windows 64 位**（见 `offline_packages/BUILD_INFO.txt`）。克隆后需执行：`git lfs pull`
+## 5 分钟上手（Windows）
 
-## 快速开始（Windows）
+### 第 0 步：准备软件
 
-### 1. 获取代码
+| 软件 | 是否必须 | 说明 |
+|------|----------|------|
+| [Git](https://git-scm.com/) | 必须 | 克隆代码；**请安装 [Git LFS](https://git-lfs.github.com/)**（离线依赖包在 LFS 里） |
+| [Python 3.12](https://www.python.org/downloads/) 64 位 | 必须 | 与仓库内离线 wheel 一致；安装时勾选 **Add to PATH** |
+| [Node.js 18+](https://nodejs.org/) | 可选 | 完整 MCP 能力；不装也能先聊天 |
+
+### 第 1 步：下载代码
 
 ```powershell
 git clone https://github.com/Zuofeng198/keji.git
 cd keji
+git lfs install
 git lfs pull
 ```
 
-### 2. 一键部署
+> `git lfs pull` 会下载约 **400MB** 离线依赖包，只需执行一次。若跳过 LFS，部署时会改为联网下载（较慢）。
+
+### 第 2 步：一键安装环境
 
 双击 **`setup_deploy.bat`**（或 `一键部署.bat`）。
 
-或在 PowerShell 中：
+脚本会自动：创建 `venv`、从本地 wheel 安装依赖、生成 `config.yaml` / `.env`、创建数据目录。
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1
-```
+### 第 3 步：填写密钥
 
-### 3. 配置密钥
-
-```powershell
-copy config.example.yaml config.yaml
-copy .env.example .env
-```
-
-编辑 **`.env`**，至少填写：
+用记事本打开项目根目录 **`.env`**，至少改这两项：
 
 ```env
-DEEPSEEK_API_KEY=你的DeepSeek密钥
-KEJI_ADMIN_PASSWORD=首次管理员密码
+DEEPSEEK_API_KEY=sk-你的DeepSeek密钥
+KEJI_ADMIN_PASSWORD=你想设置的管理员密码
 ```
 
-（`KEJI_JWT_SECRET` 部署脚本可自动生成。）
+保存后关闭。其他项可暂时留空；启动时若提示某环境变量未设置，多为可选项，补全 `.env` 后重启即可。
 
-### 4. 启动
+模型默认 DeepSeek，在 `config.yaml` 的 `models` 段可改。
 
-| 脚本 | 说明 |
+### 第 4 步：启动
+
+| 方式 | 操作 |
 |------|------|
-| `launch_keji.bat` | 后台启动 + 打开 http://127.0.0.1:8000/ |
-| `run_server.bat` | 黑窗运行，便于看日志 |
+| **推荐** | 双击 **`launch_keji.bat`** → 自动打开浏览器 |
+| 看日志 | 双击 **`run_server.bat`** → 黑窗里运行，停服务按 `Ctrl+C` |
 
-局域网访问：`http://<服务器IP>:8000/`（服务默认 `0.0.0.0:8000`）。
+- 本机访问：http://127.0.0.1:8000/
+- 局域网访问：http://**服务器IP**:8000/（同一 WiFi/内网的其他电脑）
 
-### 5. 停止服务
+### 第 5 步：登录
 
-- 黑窗模式：`Ctrl+C`
-- 后台模式：任务管理器结束 `pythonw.exe`，或见 `docs/新机部署.md`
+1. 浏览器打开上述地址  
+2. 使用管理员账号登录（默认用户名见 `config.yaml` 里 `security.bootstrap_admin.username`，一般为 `admin`）  
+3. 密码为你在 **`.env`** 里设置的 `KEJI_ADMIN_PASSWORD`  
 
-## 离线部署（可选）
+首次登录后可在管理页面创建其他用户（成员 / 只读）。
 
-克隆仓库后若已执行 `git lfs pull`，则已包含 `offline_packages/`，目标机直接 **`setup_deploy.bat`** 即可离线安装。
+---
 
-若要自行重打 wheel（例如换 Python 版本）：运行 `package_wheels.bat`。详见 [docs/离线部署.md](docs/离线部署.md)。
+## 常用脚本说明
+
+| 文件 | 用途 |
+|------|------|
+| `setup_deploy.bat` / `一键部署.bat` | 新机安装 Python 虚拟环境与依赖 |
+| `launch_keji.bat` / `启动科吉.bat` | 后台启动服务并打开网页 |
+| `run_server.bat` / `运行服务.bat` | 带黑窗启动（排错时用） |
+| `package_wheels.bat` | 在本机重新打包离线 wheel（换 Python 版本时用） |
+
+---
 
 ## 配置说明
 
-- **`config.yaml`**：模型、MCP、安全策略（勿提交到 Git）
-- **`.env`**：API Key、JWT、管理员密码（勿提交到 Git）
-- **`config.example.yaml` / `.env.example`**：模板
+| 文件 | 作用 | 是否上传 Git |
+|------|------|----------------|
+| `.env` | API Key、管理员密码、JWT 密钥 | 否（本地私密） |
+| `config.yaml` | 模型、MCP、安全策略 | 否（从 `config.example.yaml` 复制） |
+| `config.example.yaml` | 配置模板 | 是 |
+| `.env.example` | 环境变量模板 | 是 |
 
-首次启动会用 `bootstrap_admin` 创建管理员（见 `config.yaml` 中 `security.bootstrap_admin`）。
+**不要**把填好密钥的 `.env` / `config.yaml` 提交到公开仓库。
 
-## 项目结构（简要）
+---
 
-```text
-core/           业务 API、用户、工作区、权限
-nanobot/        Agent 引擎适配
-web/            前端静态页
-main.py         服务入口
-scripts/        deploy.ps1、package_offline.ps1
-docs/           部署与排错文档
+## 角色与权限（简要）
+
+| 角色 | 对话 | 文件 |
+|------|------|------|
+| **admin** | 全部工具 | 整个工作区 |
+| **member** | 可写工具 | 共享目录 + 自己的 `users/<id>/` |
+| **readonly** | 仅读/查询类工具 | 仅读共享 + 自己的目录 |
+
+团队文件物理路径：`data/workspace/shared/`、`data/workspace/users/<用户ID>/`。
+
+---
+
+## 停止服务
+
+- 用 `run_server.bat` 启动的：在黑窗按 **Ctrl+C**
+- 用 `launch_keji.bat` 启动的：任务管理器结束 **pythonw.exe**，或 PowerShell：
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue |
+  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
 ```
 
-## 文档
+---
 
-- [新机部署](docs/新机部署.md)
-- [离线部署](docs/离线部署.md)
+## 常见问题
+
+**Q：克隆后没有 `offline_packages` 或部署仍要联网？**  
+A：执行 `git lfs install` 后 `git lfs pull`。
+
+**Q：必须用 Python 3.12 吗？**  
+A：本仓库自带的离线 wheel 是 **3.12**。若你只有 3.10/3.11，可删掉 `offline_packages` 后运行 `setup_deploy.bat` 走联网安装。
+
+**Q：启动后一堆「环境变量未设置」警告？**  
+A：在 `.env` 补 `DEEPSEEK_API_KEY` 等；飞书、OpenAI 不用可忽略。
+
+**Q：双击 `main.py` 闪退？**  
+A：不要双击 py 文件，请用 `launch_keji.bat` 或 `run_server.bat`。
+
+**Q：pip 安装失败？**  
+A：确认 Python 为 64 位；或在有网环境重新运行 `setup_deploy.bat`。
+
+**Q：局域网别人访问不了？**  
+A：检查 Windows 防火墙是否放行 **8000** 端口；用服务器内网 IP，不要用 `localhost`。
+
+---
+
+## 更多文档
+
+- [新机部署详细步骤](docs/新机部署.md)
+- [离线 / 内网部署](docs/离线部署.md)
+- [使用指南（功能与页面）](docs/使用指南.md)
 - [项目目录说明](docs/项目目录说明.md)
 
-## 仓库未包含（需本地生成）
+---
 
-- `venv/`、`node_modules/`
-- `config.yaml`、`.env`
-- `data/`、`logs/`（运行后本地生成）
+## 技术栈
 
-## 许可证
+FastAPI · nanobot · SQLite 用户/会话 · JWT 鉴权 · 可选 MCP / Chroma 知识库
 
-请根据你方实际情况补充 LICENSE。
+## 许可
+
+使用前请自行补充 LICENSE；商用请注意各模型 API 与依赖库许可。
