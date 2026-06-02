@@ -9,6 +9,15 @@ function _autoScroll(el, threshold) {
 
 // ═══════════════ 斜杠命令处理 ═══════════════
 
+async function compactChatHistory() {
+  var sid = sessionId || currentConvId || conversationId;
+  if (!sid) {
+    toast('请先开始一段对话', 'error');
+    return;
+  }
+  return handleSlashInput('/compact');
+}
+
 async function execCommand(cmd, args) {
   switch (cmd) {
     case '/new':
@@ -484,6 +493,10 @@ async function approvePlan() {
           var evt = JSON.parse(line.slice(6));
           debugEvents.push(Object.assign({_time: Date.now()}, evt));
           switch (evt.phase) {
+            case 'system_notice':
+              addMessage('assistant', renderMarkdown(escHtml(evt.message || '')));
+              _autoScroll(msgs);
+              break;
             case 'plan_exec_start': if(phaseDiv)phaseDiv.remove(); phaseDiv=addPhase(_dualIcon('⚡','fa-bolt')+' 执行 '+(evt.total_steps||0)+' 步...','thinking');
               if (!execTimer) {
                 execTimerStart = Date.now();

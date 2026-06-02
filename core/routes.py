@@ -51,7 +51,10 @@ def list_documents():
 @router.post("/knowledge/index")
 def index_document(req: IndexRequest):
     """索引文件或文件夹到知识库"""
-    path = os.path.abspath(req.path)
+    from core.path_policy import check_path
+    path, err = check_path(req.path, must_exist=True)
+    if err:
+        raise HTTPException(403, err.replace("错误：", ""))
     if not os.path.exists(path):
         raise HTTPException(404, f"路径不存在: {path}")
     try:
@@ -186,9 +189,12 @@ def list_files(
     path: str = Query("", description="文件夹路径"),
 ):
     """列出目录内容"""
+    from core.path_policy import check_path, default_browse_path
     if not path:
-        path = os.path.expanduser("~\\Desktop")
-    path = os.path.abspath(path)
+        path = default_browse_path()
+    path, err = check_path(path, must_exist=True, must_be_dir=True)
+    if err:
+        raise HTTPException(403, err.replace("错误：", ""))
     try:
         from core.security.audit import audit_file_access
         audit_file_access(path, "list", tool_name="api_files_list")
@@ -245,24 +251,32 @@ def list_files(
 
 @router.get("/files/drives")
 def list_drives():
-    """列出所有驱动器（Windows）"""
+    """列出可浏览根目录（沙箱开启时仅为允许目录）"""
+    from core.path_policy import get_allowed_roots, is_sandbox_enabled
+    if is_sandbox_enabled():
+        roots = get_allowed_roots()
+        return {
+            "drives": [
+                {"name": p.name or str(p), "path": str(p), "label": str(p)}
+                for p in roots
+            ]
+        }
     import string
     drives = []
     for letter in string.ascii_uppercase:
         drive = f"{letter}:\\"
         if os.path.exists(drive):
-            drives.append({
-                "name": drive,
-                "path": drive,
-                "label": f"{drive}",
-            })
+            drives.append({"name": drive, "path": drive, "label": drive})
     return {"drives": drives}
 
 
 @router.get("/files/info")
 def file_info(path: str = Query(...)):
     """获取文件信息"""
-    path = os.path.abspath(path)
+    from core.path_policy import check_path
+    path, err = check_path(path, must_exist=True)
+    if err:
+        raise HTTPException(403, err.replace("错误：", ""))
     if not os.path.exists(path):
         raise HTTPException(404, "文件不存在")
 
@@ -294,7 +308,10 @@ def open_file(path: str = Query(...)):
     """用系统默认程序打开文件"""
     import subprocess
     import platform
-    path = os.path.abspath(path)
+    from core.path_policy import check_path
+    path, err = check_path(path, must_exist=True, must_be_file=True)
+    if err:
+        raise HTTPException(403, err.replace("错误：", ""))
     try:
         from core.security.audit import audit_file_access
         audit_file_access(path, "open", tool_name="api_files_open")
@@ -429,18 +446,39 @@ def get_settings():
     if display_type not in ("ollama", "openai"):
         display_type = "openai"
 
+    from core.security.secrets import mask_api_key_for_settings
+    from core.mcp_paths import dirs_for_display, get_mcp_config
+
+    raw_api_key = str(provider_cfg.get("api_key", "") or "")
+    _, api_configured = mask_api_key_for_settings(raw_api_key)
+
+    agent_cfg = config.get("agent") or {}
+    mcp_cfg = get_mcp_config(config)
+    mcp_dirs = mcp_cfg.get("filesystem_allowed_dirs") or []
+    if isinstance(mcp_dirs, list):
+        mcp_dirs_text = "\n".join(str(x) for x in mcp_dirs)
+    else:
+        mcp_dirs_text = str(mcp_dirs)
+
     mapped = {
         "model_type": display_type,
         "ollama_url": ollama_cfg.get("base_url", ""),
         "chat_model": ollama_cfg.get("model", ""),
-        # OpenAI 兼容的表单 → 显示实际使用的 provider 的值
         "openai_base_url": provider_cfg.get("base_url", ""),
-        "openai_api_key": provider_cfg.get("api_key", ""),
+        "openai_api_key": "",
+        "openai_api_key_configured": api_configured,
         "openai_model": provider_cfg.get("model", ""),
         "embed_model": know.get("embedding_model", ""),
         "chunk_size": str(know.get("chunk_size", "")),
         "chunk_overlap": str(know.get("chunk_overlap", "")),
         "top_k": str(know.get("retrieval_count", "")),
+        "context_auto_compact_enabled": agent_cfg.get("context_auto_compact_enabled", True),
+        "context_auto_compact_threshold": str(agent_cfg.get("context_auto_compact_threshold", 60000)),
+        "context_prune_tool_results": agent_cfg.get("context_prune_tool_results", True),
+        "mcp_filesystem_dirs": mcp_dirs_text,
+        "mcp_include_knowledge": mcp_cfg.get("include_knowledge", True),
+        "mcp_include_data": mcp_cfg.get("include_data", True),
+        "mcp_resolved_dirs": dirs_for_display(config),
     }
 
     # 企业微信等设置仍从 DB 读取
@@ -475,6 +513,9 @@ def _get_config_path(settings_key: str, default_provider: str) -> list[str]:
         "chunk_size":    ["knowledge", "chunk_size"],
         "chunk_overlap": ["knowledge", "chunk_overlap"],
         "top_k":         ["knowledge", "retrieval_count"],
+        "context_auto_compact_enabled": ["agent", "context_auto_compact_enabled"],
+        "context_auto_compact_threshold": ["agent", "context_auto_compact_threshold"],
+        "context_prune_tool_results": ["agent", "context_prune_tool_results"],
     }
     return _common_keys.get(settings_key, [])
 
@@ -491,6 +532,12 @@ _CONFIG_KEY_MAP = frozenset({
     "chunk_size",
     "chunk_overlap",
     "top_k",
+    "context_auto_compact_enabled",
+    "context_auto_compact_threshold",
+    "context_prune_tool_results",
+    "mcp_filesystem_dirs",
+    "mcp_include_knowledge",
+    "mcp_include_data",
 })
 
 
@@ -538,6 +585,9 @@ def update_settings(req: SettingsUpdate):
         else:
             db_updates[key] = value
 
+    mcp_dirs_raw = None
+    mcp_changed = False
+
     # 写入 config.yaml
     if config_updates:
         yaml = YAML()
@@ -552,14 +602,60 @@ def update_settings(req: SettingsUpdate):
 
         default_provider = config.get("models", {}).get("default", "openai")
 
+        from core.security.secrets import persist_provider_api_key
+
+        api_key_val = config_updates.pop("openai_api_key", None)
+        if api_key_val:
+            persist_provider_api_key(config, default_provider, str(api_key_val))
+
+        mcp_dirs_raw = config_updates.pop("mcp_filesystem_dirs", None)
+        mcp_inc_k = config_updates.pop("mcp_include_knowledge", None)
+        mcp_inc_d = config_updates.pop("mcp_include_data", None)
+        if mcp_dirs_raw is not None or mcp_inc_k is not None or mcp_inc_d is not None:
+            mcp_changed = True
+            mcp = config.setdefault("mcp", {})
+            if mcp_dirs_raw is not None:
+                lines = [
+                    ln.strip() for ln in str(mcp_dirs_raw).replace("\r", "").split("\n")
+                    if ln.strip()
+                ]
+                mcp["filesystem_allowed_dirs"] = lines
+            if mcp_inc_k is not None:
+                mcp["include_knowledge"] = str(mcp_inc_k).lower() in ("1", "true", "yes", "on")
+            if mcp_inc_d is not None:
+                mcp["include_data"] = str(mcp_inc_d).lower() in ("1", "true", "yes", "on")
+
         for key, value in config_updates.items():
-            if value is not None and value != "":
+            if key in ("context_auto_compact_enabled", "context_prune_tool_results"):
+                if isinstance(value, bool):
+                    bool_val = value
+                else:
+                    bool_val = str(value).lower() in ("1", "true", "yes", "on")
                 path = _get_config_path(key, default_provider)
                 if path:
-                    _set_nested(config, path, value)
+                    _set_nested(config, path, bool_val)
+                continue
+            if value is None or value == "":
+                continue
+            if key == "context_auto_compact_threshold":
+                try:
+                    value = int(value)
+                except (ValueError, TypeError):
+                    continue
+            path = _get_config_path(key, default_provider)
+            if path:
+                _set_nested(config, path, value)
 
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(config, f)
+
+        try:
+            from nanobot import adapter as _adapter_mod
+            if _adapter_mod.adapter is not None:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    _adapter_mod.adapter.config = yaml.load(f) or {}
+        except Exception:
+            pass
 
     # 写入 DB（企业微信等）
     if db_updates:
@@ -568,7 +664,36 @@ def update_settings(req: SettingsUpdate):
             if value is not None:
                 db.set_setting(key, str(value))
 
-    return {"status": "ok", "message": "设置已保存，重启服务后生效"}
+    msg = "设置已保存"
+    if mcp_changed:
+        msg += "；MCP 文件目录已写入配置，请点击「应用 MCP 目录」或重启服务"
+    else:
+        msg += "；对话压缩等新参数已生效（MCP 变更需应用或重启）"
+    return {"status": "ok", "message": msg}
+
+
+@router.post("/mcp/reload")
+async def reload_mcp_servers():
+    """重新连接 MCP（应用 filesystem 允许目录变更）。"""
+    adapter = await _get_adapter()
+    # 重载磁盘上的 config.yaml
+    from core.security.secrets import load_app_config
+    from pathlib import Path
+    config_path = Path(__file__).resolve().parent.parent / "config.yaml"
+    adapter.config = load_app_config(config_path)
+    dirs = await adapter.reload_filesystem_mcp()
+    return {"status": "ok", "message": "MCP 文件目录已应用", "filesystem_dirs": dirs}
+
+
+@router.get("/mcp/filesystem-dirs")
+def get_mcp_filesystem_dirs():
+    """当前生效的 MCP 文件系统允许目录。"""
+    from core.security.secrets import load_app_config
+    from core.mcp_paths import dirs_for_display
+    from pathlib import Path
+    config_path = Path(__file__).resolve().parent.parent / "config.yaml"
+    config = load_app_config(config_path)
+    return {"directories": dirs_for_display(config)}
 
 
 class TestModelRequest(BaseModel):
@@ -999,6 +1124,12 @@ def mcp_status():
         return {"connected": [], "error": str(e)[:200]}
 
 
+@router.post("/mcp/servers")
+async def reload_mcp_servers_alias():
+    """与 POST /api/mcp/reload 相同（兼容旧前端或代理路径）。"""
+    return await reload_mcp_servers()
+
+
 # ──────────── 数据库管理接口 ────────────
 
 import base64
@@ -1386,51 +1517,15 @@ async def cmd_compact(req: dict):
     """压缩会话：LLM 总结历史 → 创建新会话"""
     session_id = req.get("session_id", "")
     if not session_id:
-        return {"text": "错误: 缺少 session_id"}
+        return {"text": "错误: 缺少 session_id", "new_session_id": ""}
 
-    from nanobot.session.manager import SessionManager
     from pathlib import Path
+    from nanobot.session.manager import SessionManager
+    from core.context_compact import compact_session_new
+
     sm = SessionManager(Path(__file__).resolve().parent.parent)
-    data = sm.read_session_file(session_id)
-    if not data:
-        return {"text": "错误: 未找到会话"}
-
-    msgs = data.get("messages", [])
-    if len(msgs) < 2:
-        return {"text": "对话太短，无需压缩"}
-
-    # 提取对话文本
-    dialog = []
-    for m in msgs[-20:]:
-        role = m.get("role", "?")
-        content = str(m.get("content", ""))[:500]
-        dialog.append(f"{role}: {content}")
-    dialog_text = "\n\n".join(dialog)
-
-    # 调用 LLM 生成摘要
     adapter = await _get_adapter()
-    provider = adapter.provider
-    summary_prompt = f"请用简洁的中文概括以下对话的核心内容（300字以内），包括：用户需求、关键结论、已完成的操作。\n\n对话记录：\n{dialog_text}"
-    try:
-        resp = await provider.chat([{"role": "user", "content": summary_prompt}])
-        summary = resp.content.strip()
-    except Exception as e:
-        summary = f"[AI 总结失败: {e}]"
-
-    from datetime import datetime
-    new_key = f"compact:{session_id}:{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    new_session = sm.get_or_create(new_key)
-    new_session.add_message("user", f"[对话摘要] 以下是之前对话的摘要：\n\n{summary}\n\n---\n请输入你的新问题")
-    new_session.add_message("assistant",
-        "✅ 历史对话已压缩！原会话仍可查看。\n\n"
-        f"**对话摘要**：\n{summary}\n\n"
-        "请在下方继续提问，我会基于以上上下文回答。")
-    sm.save(new_session)
-
-    return {
-        "text": f"✅ 对话已压缩，切换到新会话。\n\n**摘要**：{summary}",
-        "new_session_id": new_key
-    }
+    return await compact_session_new(sm, session_id, adapter.provider)
 
 
 # ──────────── Token 统计接口 ────────────

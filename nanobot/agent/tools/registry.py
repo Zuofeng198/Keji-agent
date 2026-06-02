@@ -27,6 +27,17 @@ class ToolRegistry:
         self._tools.pop(name, None)
         self._cached_definitions = None
 
+    def unregister_prefix(self, prefix: str) -> int:
+        """按名称前缀批量移除工具（用于单独重连某个 MCP 服务）。"""
+        if not prefix:
+            return 0
+        removed = [n for n in self._tools if n.startswith(prefix)]
+        for name in removed:
+            self._tools.pop(name, None)
+        if removed:
+            self._cached_definitions = None
+        return len(removed)
+
     def get(self, name: str) -> Tool | None:
         """Get a tool by name."""
         return self._tools.get(name)

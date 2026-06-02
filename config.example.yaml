@@ -7,6 +7,8 @@ security:
   api_key: ${KEJI_API_KEY}
   allow_localhost_without_auth: true
   public_paths: []
+  # 全局文件沙箱：内置工具、run_code、网页文件浏览、exec 等均只能访问下方 mcp 允许目录
+  filesystem_sandbox: true
 
 audit:
   enabled: true
@@ -48,6 +50,12 @@ agent:
   tool_max_retries: 2
   tool_retry_backoff: 2
   default_skills: []
+  # 对话上下文治理
+  context_prune_tool_results: true
+  context_auto_compact_enabled: true
+  context_auto_compact_threshold: 60000
+  context_compact_keep_recent: 8
+  context_compact_summary_max_messages: 40
 
 tools:
   enabled:
@@ -108,10 +116,18 @@ logging:
   file: logs/agent.log
   format: json
 
+# MCP 文件系统允许目录（运行时注入到 filesystem 服务，无需写死在 args 里）
+mcp:
+  filesystem_allowed_dirs:
+    - knowledge
+    - data
+  include_knowledge: true
+  include_data: true
+
 mcp_servers:
   filesystem:
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "./"]
+    args: ["-y", "@modelcontextprotocol/server-filesystem"]
 
   memdb:
     command: npx
@@ -144,6 +160,13 @@ mcp_servers:
   engineer-your-data:
     command: python
     args: ["-m", "src.server"]
+
+# 自检：列在 optional_mcp_servers 的 MCP 未连接时仅警告，不阻断建文件夹等基础操作
+selfcheck:
+  optional_mcp_servers:
+    - engineer-your-data
+    - image-gen
+    - charts
 
 wechat:
   session_path: data/wechat_session.json

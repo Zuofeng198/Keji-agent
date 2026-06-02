@@ -58,10 +58,12 @@ class ExecTool(Tool):
         sandbox: str = "",
         path_append: str = "",
         allowed_env_keys: list[str] | None = None,
+        allowed_roots: list[str] | None = None,
     ):
         self.timeout = timeout
         self.working_dir = working_dir
         self.sandbox = sandbox
+        self.allowed_roots = [Path(p).resolve() for p in (allowed_roots or [])]
         self.deny_patterns = (deny_patterns or []) + [
             r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
             r"\bdel\s+/[fq]\b",              # del /f, del /q
@@ -324,6 +326,23 @@ class ExecTool(Tool):
             # SSRF stays fatal in the runner, so keep this marker direct.
             return "Error: Command blocked by safety guard (internal/private URL detected)"
 
+        if self.allowed_roots:
+            for raw in self._extract_absolute_paths(cmd):
+                try:
+                    expanded = os.path.expandvars(raw.strip())
+                    if self._is_benign_device_path(expanded):
+                        continue
+                    p = Path(expanded).expanduser().resolve()
+                except Exception:
+                    continue
+                if self._is_benign_device_path(str(p)):
+                    continue
+                if not any(self._path_under_root(p, root) for root in self.allowed_roots):
+                    return (
+                        "Error: Command blocked by safety guard (path outside allowed directories)"
+                        + _WORKSPACE_BOUNDARY_NOTE
+                    )
+
         if self.restrict_to_workspace:
             if "..\\" in cmd or "../" in cmd:
                 return (
@@ -361,6 +380,14 @@ class ExecTool(Tool):
                     )
 
         return None
+
+    @staticmethod
+    def _path_under_root(path: Path, root: Path) -> bool:
+        try:
+            path.resolve().relative_to(root.resolve())
+            return True
+        except ValueError:
+            return False
 
     @classmethod
     def _is_benign_device_path(cls, path: str) -> bool:

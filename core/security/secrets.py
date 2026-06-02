@@ -76,6 +76,70 @@ def load_dotenv_file(project_root: Path | None = None) -> None:
             os.environ[key] = value
 
 
+_PROVIDER_ENV_VARS: dict[str, str] = {
+    "deepseek": "DEEPSEEK_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
+
+
+def provider_env_var(provider: str) -> str:
+    return _PROVIDER_ENV_VARS.get(provider, f"{provider.upper()}_API_KEY")
+
+
+def is_env_ref(value: str) -> bool:
+    return bool(_ENV_PATTERN.match(str(value or "").strip()))
+
+
+def upsert_dotenv_var(project_root: Path, key: str, value: str) -> None:
+    """写入或更新项目根 .env 中的变量（不覆盖其他行）。"""
+    env_file = project_root / ".env"
+    lines: list[str] = []
+    if env_file.is_file():
+        lines = env_file.read_text(encoding="utf-8").splitlines()
+    found = False
+    out: list[str] = []
+    prefix = f"{key}="
+    for line in lines:
+        if line.strip().startswith("#") or "=" not in line:
+            out.append(line)
+            continue
+        k, _, _ = line.partition("=")
+        if k.strip() == key:
+            out.append(f"{key}={value}")
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(f"{key}={value}")
+    env_file.write_text("\n".join(out) + "\n", encoding="utf-8")
+    os.environ[key] = value
+    logger.info("已更新 .env 中的 {}", key)
+
+
+def persist_provider_api_key(config: dict, provider: str, api_key: str, project_root: Path | None = None) -> None:
+    """将模型 API Key 写入 .env，并在 config 中改为 ${ENV} 引用。"""
+    key = (api_key or "").strip()
+    if not key or is_env_ref(key) or key in ("***", "••••"):
+        return
+    root = project_root or Path(__file__).resolve().parent.parent.parent
+    var = provider_env_var(provider)
+    upsert_dotenv_var(root, var, key)
+    models = config.setdefault("models", {})
+    prov = models.setdefault(provider, {})
+    prov["api_key"] = f"${{{var}}}"
+
+
+def mask_api_key_for_settings(raw: str) -> tuple[str, bool]:
+    """返回 (展示值, 是否已配置)。不向浏览器回传明文密钥。"""
+    if not raw:
+        return "", False
+    if is_env_ref(raw):
+        return "", True
+    return "", True
+
+
 def load_app_config(config_path: Path | None = None) -> dict:
     """加载 config.yaml 并解析环境变量引用。"""
     root = Path(__file__).resolve().parent.parent.parent

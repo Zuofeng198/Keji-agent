@@ -115,7 +115,10 @@ def ocr_image(path: str = "", image_path: str = "", lang: str = "ch_sim+eng") ->
         path = image_path
     if not path:
         return "错误：请提供图片路径（参数名 path 或 image_path）"
-    path = os.path.abspath(path)
+    from core.path_policy import check_path
+    path, err = check_path(path, must_exist=True, must_be_file=True)
+    if err:
+        return err
     if not os.path.isfile(path):
         return f"错误：文件不存在「{path}」"
     if not _is_supported_image(path):
@@ -178,7 +181,10 @@ def ocr_pdf(path: str = "", image_path: str = "", lang: str = "ch_sim+eng", page
         path = image_path
     if not path:
         return "错误：请提供 PDF 路径（参数名 path 或 image_path）"
-    path = os.path.abspath(path)
+    from core.path_policy import check_path
+    path, err = check_path(path, must_exist=True, must_be_file=True)
+    if err:
+        return err
     if not os.path.isfile(path):
         return f"错误：文件不存在「{path}」"
     if os.path.splitext(path)[1].lower() != ".pdf":

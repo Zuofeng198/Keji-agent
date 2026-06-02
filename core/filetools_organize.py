@@ -67,9 +67,12 @@ def _get_file_category(ext: str) -> str:
     timeout=120,
 )
 def organize_files(source_dir: str = "", mode: str = "type", preview: bool = False, recursive: bool = False) -> str:
+    from core.path_policy import check_path, default_browse_path
     if not source_dir:
-        source_dir = os.path.expanduser("~\\Desktop")
-    source_dir = os.path.abspath(source_dir)
+        source_dir = default_browse_path()
+    source_dir, err = check_path(source_dir, must_exist=True, must_be_dir=True)
+    if err:
+        return err
 
     if not os.path.isdir(source_dir):
         return f"错误：文件夹不存在「{source_dir}」"
@@ -199,9 +202,12 @@ def organize_files(source_dir: str = "", mode: str = "type", preview: bool = Fal
 )
 def rename_files(directory: str = "", pattern: str = "prefix", value: str = "",
                  ext_filter: str = "", preview: bool = True, start_from: int = 1) -> str:
+    from core.path_policy import check_path, default_browse_path
     if not directory:
-        directory = os.path.expanduser("~\\Desktop")
-    directory = os.path.abspath(directory)
+        directory = default_browse_path()
+    directory, err = check_path(directory, must_exist=True, must_be_dir=True)
+    if err:
+        return err
 
     if not os.path.isdir(directory):
         return f"错误：文件夹不存在「{directory}」"
@@ -323,9 +329,12 @@ def rename_files(directory: str = "", pattern: str = "prefix", value: str = "",
 )
 def deduplicate_files(directory: str = "", action: str = "scan",
                       move_dir: str = "", fuzzy_name: bool = True) -> str:
+    from core.path_policy import check_path, default_browse_path
     if not directory:
-        directory = os.path.expanduser("~\\Desktop")
-    directory = os.path.abspath(directory)
+        directory = default_browse_path()
+    directory, err = check_path(directory, must_exist=True, must_be_dir=True)
+    if err:
+        return err
 
     if not os.path.isdir(directory):
         return f"错误：文件夹不存在「{directory}」"
@@ -436,7 +445,9 @@ def deduplicate_files(directory: str = "", action: str = "scan",
         lines.append(f"\n✅ 已删除 {deleted} 个重复文件，释放 {_format_size(saved)} 空间")
 
     elif action == "move_to" and exact_dupes and move_dir:
-        move_dir = os.path.abspath(move_dir)
+        move_dir, err = check_path(move_dir)
+        if err:
+            return err
         os.makedirs(move_dir, exist_ok=True)
         moved = 0
         for md5, files in exact_dupes.items():

@@ -162,7 +162,7 @@ class GlobTool(_SearchTool):
                 },
                 "path": {
                     "type": "string",
-                    "description": "Directory to search from (default '.')",
+                    "description": "Directory to search from (default: first allowed sandbox dir, else project root)",
                 },
                 "max_results": {
                     "type": "integer",

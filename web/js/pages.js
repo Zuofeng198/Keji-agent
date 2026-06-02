@@ -432,11 +432,76 @@ function loadModelSettings() {
     if (s.ollama_url) document.getElementById('setOllamaUrl').value = s.ollama_url;
     if (s.chat_model) document.getElementById('setChatModel').value = s.chat_model;
     if (s.openai_base_url) document.getElementById('setOpenaiUrl').value = s.openai_base_url;
-    if (s.openai_api_key) document.getElementById('setOpenaiKey').value = s.openai_api_key;
+    var keyInput = document.getElementById('setOpenaiKey');
+    if (keyInput) {
+      if (s.openai_api_key) keyInput.value = s.openai_api_key;
+      keyInput.placeholder = s.openai_api_key_configured
+        ? '已配置（留空不修改，填写则写入 .env）'
+        : 'sk-...';
+    }
     if (s.openai_model) document.getElementById('setOpenaiModel').value = s.openai_model;
     if (s.embed_model) document.getElementById('setEmbedModel').value = s.embed_model;
+    if (s.chunk_size) document.getElementById('setChunkSize').value = s.chunk_size;
+    if (s.chunk_overlap) document.getElementById('setOverlap').value = s.chunk_overlap;
+    if (s.top_k) document.getElementById('setTopK').value = s.top_k;
+    var ac = document.getElementById('setAutoCompact');
+    if (ac) ac.checked = s.context_auto_compact_enabled !== false && s.context_auto_compact_enabled !== 'false';
+    var pt = document.getElementById('setPruneTools');
+    if (pt) pt.checked = s.context_prune_tool_results !== false && s.context_prune_tool_results !== 'false';
+    var th = document.getElementById('setCompactThreshold');
+    if (th && s.context_auto_compact_threshold) th.value = s.context_auto_compact_threshold;
+    var mcpTa = document.getElementById('setMcpDirs');
+    if (mcpTa && s.mcp_filesystem_dirs) mcpTa.value = s.mcp_filesystem_dirs;
+    var mik = document.getElementById('setMcpIncludeKnowledge');
+    if (mik) mik.checked = s.mcp_include_knowledge !== false && s.mcp_include_knowledge !== 'false';
+    var mid = document.getElementById('setMcpIncludeData');
+    if (mid) mid.checked = s.mcp_include_data !== false && s.mcp_include_data !== 'false';
+    var mcpHint = document.getElementById('setMcpResolvedHint');
+    if (mcpHint && s.mcp_resolved_dirs && s.mcp_resolved_dirs.length) {
+      mcpHint.textContent = s.mcp_resolved_dirs.join(' · ');
+    }
     toggleModelType();
   }).catch(function(){});
+}
+
+function _applyMcpReloadResponse(d) {
+  var hint = document.getElementById('setMcpResolvedHint');
+  if (hint && d.filesystem_dirs && d.filesystem_dirs.length) {
+    hint.textContent = d.filesystem_dirs.join(' · ');
+  }
+  toast(d.message || 'MCP 已重新连接', 'success');
+}
+
+function reloadMcpFilesystem() {
+  var btn = document.querySelector('button[onclick="reloadMcpFilesystem()"]');
+  var prevText = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '连接文件 MCP…';
+  }
+  function tryReload(url) {
+    return kejiFetch(url, { method: 'POST' }).then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    });
+  }
+  tryReload('/api/mcp/reload')
+    .catch(function() { return tryReload('/api/mcp/servers'); })
+    .then(_applyMcpReloadResponse)
+    .catch(function(e) {
+      var msg = String(e.message || e);
+      if (msg.indexOf('404') >= 0) {
+        toast('应用失败：请先完全退出并重新启动科吉（运行 启动科吉.bat），再点「应用 MCP 目录」', 'error');
+      } else {
+        toast('应用失败: ' + msg, 'error');
+      }
+    })
+    .finally(function() {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = prevText || '应用 MCP 目录（无需重启）';
+      }
+    });
 }
 
 function testModelConn() {
@@ -487,6 +552,12 @@ function saveSettings() {
     chunk_size: document.getElementById('setChunkSize').value,
     chunk_overlap: document.getElementById('setOverlap').value,
     top_k: document.getElementById('setTopK').value,
+    context_auto_compact_enabled: document.getElementById('setAutoCompact') ? document.getElementById('setAutoCompact').checked : true,
+    context_auto_compact_threshold: document.getElementById('setCompactThreshold') ? document.getElementById('setCompactThreshold').value : '60000',
+    context_prune_tool_results: document.getElementById('setPruneTools') ? document.getElementById('setPruneTools').checked : true,
+    mcp_filesystem_dirs: document.getElementById('setMcpDirs') ? document.getElementById('setMcpDirs').value : '',
+    mcp_include_knowledge: document.getElementById('setMcpIncludeKnowledge') ? document.getElementById('setMcpIncludeKnowledge').checked : true,
+    mcp_include_data: document.getElementById('setMcpIncludeData') ? document.getElementById('setMcpIncludeData').checked : true,
   };
 
   kejiFetch('/api/settings', {

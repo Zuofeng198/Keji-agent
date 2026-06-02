@@ -34,6 +34,9 @@ MCP_SERVER_NAMES = {
     "mcp_engineer-your-data_":  "engineer-your-data",
 }
 
+# 默认视为可选：未连接时记警告，不阻断文件/对话等基础能力
+DEFAULT_OPTIONAL_MCP_SERVERS = frozenset({"engineer-your-data", "image-gen", "charts"})
+
 
 class CheckResult:
     """单项检查结果"""
@@ -145,6 +148,21 @@ class SelfCheckRunner:
         self.project_root = project_root
         self.config = config or {}
 
+    def _configured_mcp_servers(self) -> set[str]:
+        servers = self.config.get("mcp_servers") or {}
+        return {str(k) for k in servers.keys()}
+
+    def _optional_mcp_servers(self) -> set[str]:
+        sc = self.config.get("selfcheck") or {}
+        raw = sc.get("optional_mcp_servers")
+        if raw is None:
+            return set(DEFAULT_OPTIONAL_MCP_SERVERS)
+        return {str(x) for x in raw}
+
+    def _required_mcp_servers(self) -> set[str]:
+        configured = self._configured_mcp_servers()
+        return configured - self._optional_mcp_servers()
+
     def run(self) -> SelfCheckReport:
         report = SelfCheckReport()
         for method in [
@@ -173,8 +191,15 @@ class SelfCheckRunner:
         all_names = self.tools.tool_names
         total = len(all_names)
         missing: list[str] = []
-        # 检查关键前缀组
+        optional_srv = self._optional_mcp_servers()
+        configured = self._configured_mcp_servers()
+        # 检查关键前缀组（跳过未配置或标记为可选的 MCP）
         for prefix, label in CRITICAL_TOOL_PREFIXES.items():
+            srv = MCP_SERVER_NAMES.get(prefix)
+            if srv and srv not in configured:
+                continue
+            if srv and srv in optional_srv:
+                continue
             found = any(n.startswith(prefix) for n in all_names)
             if not found:
                 missing.append(label)
@@ -196,11 +221,22 @@ class SelfCheckRunner:
         for prefix, srv in MCP_SERVER_NAMES.items():
             if any(n.startswith(prefix) for n in all_names):
                 found_servers.add(srv)
-        total_configured = len(MCP_SERVER_NAMES)
-        if len(found_servers) < total_configured:
-            missing = set(MCP_SERVER_NAMES.values()) - found_servers
-            return r.fail(f"未连接 {len(missing)} 个: {', '.join(sorted(missing))}")
-        return r.ok(f"✓ {len(found_servers)}/{total_configured} 服务器在线")
+        configured = self._configured_mcp_servers()
+        if not configured:
+            return r.warn("未配置 mcp_servers")
+        required = self._required_mcp_servers()
+        optional = self._optional_mcp_servers() & configured
+        missing_required = required - found_servers
+        missing_optional = optional - found_servers
+        if missing_required:
+            return r.fail(f"必需 MCP 未连接: {', '.join(sorted(missing_required))}")
+        if missing_optional:
+            return r.warn(
+                f"可选 MCP 未连接 {len(missing_optional)} 个: {', '.join(sorted(missing_optional))}"
+                "（不影响建文件夹、读文档等基础操作）"
+            )
+        online = len(found_servers & configured)
+        return r.ok(f"✓ {online}/{len(configured)} 个已配置 MCP 在线")
 
     # ── ③ 数据库 ──────────────────────────────────
 

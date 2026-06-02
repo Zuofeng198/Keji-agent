@@ -20,93 +20,11 @@ logger = setup_logger("keji.agent")
 # Context compression — tool result pruning (no LLM call)
 # ---------------------------------------------------------------------------
 
-def _summarize_tool_result(tool_name: str, result: str, args: dict = None) -> str:
-    """将工具结果压缩为 1 行摘要（参考 Hermes ContextCompressor）"""
-    if not result:
-        return f"[{tool_name}] 返回空"
-
-    content_len = len(result)
-    line_count = result.count("\n") + 1 if result.strip() else 0
-
-    if tool_name == "get_time":
-        return f"[get_time] {result[:60]}"
-
-    if tool_name == "calculator":
-        return f"[calculator] {result[:80]}"
-
-    if tool_name == "read_file":
-        path = (args or {}).get("filename", "?")
-        return f"[read_file] 读取 {path} ({content_len:,} 字符)"
-
-    if tool_name == "web_search":
-        query = (args or {}).get("query", "?")
-        return f"[web_search] 搜索 '{query}' ({content_len:,} 字符结果)"
-
-    if tool_name == "browse_files":
-        path = (args or {}).get("path", "?")
-        return f"[browse_files] 浏览 {path} ({line_count} 项)"
-
-    if tool_name == "search_files":
-        pattern = (args or {}).get("pattern", "?")
-        return f"[search_files] 搜索 '{pattern}' ({line_count} 行)"
-
-    if tool_name == "read_document":
-        path = (args or {}).get("path", "?")
-        return f"[read_document] 读取 {path} ({content_len:,} 字符)"
-
-    if tool_name == "create_document":
-        title = (args or {}).get("title", "?")
-        return f"[create_document] 生成文档 '{title}' ({content_len:,} 字符)"
-
-    if tool_name == "create_table":
-        headers = (args or {}).get("headers", "?")
-        return f"[create_table] 创建表格 '{headers[:30]}'"
-
-    if tool_name == "create_presentation":
-        title = (args or {}).get("title", "?")
-        return f"[create_presentation] 创建演示 '{title}'"
-
-    if tool_name == "query_knowledge":
-        query = (args or {}).get("query", "?")
-        return f"[query_knowledge] 检索 '{query}' ({line_count} 条)"
-
-    if tool_name == "index_knowledge":
-        path = (args or {}).get("path", "?")
-        return f"[index_knowledge] 索引 {path}"
-
-    if tool_name == "analyze_data":
-        source = (args or {}).get("data_source", "?")
-        return f"[analyze_data] 分析 {source[:40]}"
-
-    if tool_name == "format_data":
-        op = (args or {}).get("operation", "?")
-        return f"[format_data] 数据整理 {op}"
-
-    if tool_name == "create_folder":
-        path = (args or {}).get("path", "?")
-        return f"[create_folder] 创建文件夹 {path}"
-
-    if tool_name == "delete_file":
-        path = (args or {}).get("path", "?")
-        return f"[delete_file] 删除文件 {path}"
-
-    if tool_name == "remove_from_knowledge":
-        name = (args or {}).get("name", "?")
-        return f"[remove_from_knowledge] 知识库删档 {name}"
-
-    # 通用后备
-    first_arg = ""
-    if args:
-        for k, v in list(args.items())[:2]:
-            sv = str(v)[:40]
-            first_arg += f" {k}={sv}"
-    return f"[{tool_name}]{first_arg} ({content_len:,} 字符, {line_count} 行)"
-
-
-# 尾部保护常量（按 token 预算保护最新 ~20K tokens）
-_TAIL_TOKEN_BUDGET = 20000
-_HEAD_PROTECT_COUNT = 4
-_CHARS_PER_TOKEN = 4
+from core.context_prune import (  # noqa: E402
+    prune_tool_results as _prune_tool_results,
+    should_prune_messages as _should_compress,
+    summarize_tool_result as _summarize_tool_result,
+)
 
 
 def _format_size(size: int) -> str:
@@ -115,78 +33,6 @@ def _format_size(size: int) -> str:
             return f"{size:.1f}{unit}"
         size /= 1024
     return f"{size:.1f}TB"
-
-
-def _should_compress(messages: list[dict]) -> bool:
-    """判断是否需要压缩上下文：粗略估计 token 数是否过多"""
-    total_chars = sum(len(str(m.get("content", ""))) for m in messages)
-    # 加上工具调用的字符
-    for m in messages:
-        for tc in m.get("tool_calls", []):
-            total_chars += len(str(tc.get("function", {}).get("arguments", "")))
-    estimated_tokens = total_chars // _CHARS_PER_TOKEN
-    return estimated_tokens > _TAIL_TOKEN_BUDGET * 1.5
-
-
-def _prune_tool_results(messages: list[dict]) -> list[dict]:
-    """剪枝旧工具结果：尾部按 token 预算保护，中部替换为 1 行摘要"""
-    n = len(messages)
-    if n <= _HEAD_PROTECT_COUNT + 3:
-        return messages
-
-    result = [m.copy() for m in messages]
-
-    # 构建 tool_call_id -> (tool_name, args) 索引
-    call_id_to_tool = {}
-    for msg in result:
-        if msg.get("role") == "assistant":
-            for tc in msg.get("tool_calls", []):
-                if isinstance(tc, dict):
-                    cid = tc.get("id", "")
-                else:
-                    cid = getattr(tc, "id", "") or ""
-                fn = tc.get("function", {}) if isinstance(tc, dict) else getattr(tc, "function", None)
-                name = fn.get("name", "unknown") if isinstance(fn, dict) else "unknown"
-                args_str = fn.get("arguments", "") if isinstance(fn, dict) else ""
-                if cid:
-                    call_id_to_tool[cid] = (name, args_str)
-
-    # 按 token 预算定位尾部边界
-    accumulated = 0
-    cut_idx = n
-    min_tail = 3  # 最少保护 3 条
-    for i in range(n - 1, _HEAD_PROTECT_COUNT - 1, -1):
-        msg = result[i]
-        raw = msg.get("content") or ""
-        content_len = len(raw) if isinstance(raw, str) else len(str(raw))
-        msg_tokens = content_len // _CHARS_PER_TOKEN + 10
-        for tc in msg.get("tool_calls", []):
-            if isinstance(tc, dict):
-                args = tc.get("function", {}).get("arguments", "")
-                msg_tokens += len(args) // _CHARS_PER_TOKEN
-        if accumulated + msg_tokens > _TAIL_TOKEN_BUDGET and (n - i) >= min_tail:
-            break
-        accumulated += msg_tokens
-        cut_idx = i
-
-    # 中部工具结果替换为摘要
-    for i in range(_HEAD_PROTECT_COUNT, cut_idx):
-        msg = result[i]
-        if msg.get("role") != "tool":
-            continue
-        content = msg.get("content", "")
-        if not content or not isinstance(content, str) or len(content) < 200:
-            continue
-        call_id = msg.get("tool_call_id", "")
-        tool_name, tool_args_str = call_id_to_tool.get(call_id, ("unknown", "{}"))
-        try:
-            args = json.loads(tool_args_str) if tool_args_str else {}
-        except (json.JSONDecodeError, TypeError):
-            args = {}
-        summary = _summarize_tool_result(tool_name, content, args)
-        result[i] = {**msg, "content": summary}
-
-    return result
 
 
 def _summarize_messages(messages: list[dict]) -> str:

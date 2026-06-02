@@ -20,7 +20,10 @@ def _format_size(size: int) -> str:
 
 def _ensure_output_dir(path: str) -> str:
     """确保输出目录存在，不存在则创建"""
-    path = os.path.abspath(path)
+    from core.path_policy import check_path
+    path, err = check_path(path)
+    if err:
+        raise ValueError(err.replace("错误：", ""))
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -73,7 +76,10 @@ def _list_tar(tf: tarfile.TarFile) -> str:
     timeout=15,
 )
 def browse_archive(path: str) -> str:
-    path = os.path.abspath(path)
+    from core.path_policy import check_path
+    path, err = check_path(path, must_exist=True, must_be_file=True)
+    if err:
+        return err
     if not os.path.isfile(path):
         return f"错误：文件不存在「{path}」"
 
@@ -173,14 +179,20 @@ def _browse_rar(path: str, size_str: str) -> str:
     timeout=120,
 )
 def extract_archive(path: str, output_dir: str = "", password: str = "") -> str:
-    path = os.path.abspath(path)
+    from core.path_policy import check_path
+    path, err = check_path(path, must_exist=True, must_be_file=True)
+    if err:
+        return err
     if not os.path.isfile(path):
         return f"错误：文件不存在「{path}」"
 
     if not output_dir:
         base = os.path.splitext(os.path.basename(path))[0]
         output_dir = os.path.join(os.path.dirname(path), base)
-    output_dir = _ensure_output_dir(output_dir)
+    try:
+        output_dir = _ensure_output_dir(output_dir)
+    except ValueError as e:
+        return f"错误：{e}"
 
     fmt = _detect_format(path)
     try:
@@ -276,13 +288,13 @@ def create_archive(sources: str, output_path: str = "", format: str = "zip") -> 
     if not source_list:
         return "错误：请至少提供一个要压缩的文件或文件夹路径"
 
-    # 验证源路径
+    from core.path_policy import check_path
     valid_sources = []
     for s in source_list:
-        s = os.path.abspath(s)
-        if not os.path.exists(s):
-            return f"错误：源路径不存在「{s}」"
-        valid_sources.append(s)
+        resolved, err = check_path(s, must_exist=True)
+        if err:
+            return err
+        valid_sources.append(resolved)
 
     return _do_create_archive(valid_sources, output_path, format)
 
@@ -293,12 +305,15 @@ def _do_create_archive(sources: list, output_path: str, fmt: str) -> str:
         fmt = "zip"
 
     # 自动补齐扩展名
+    from core.path_policy import check_path, default_browse_path
     if not output_path:
-        desktop = os.path.expanduser("~\\Desktop")
+        base_dir = default_browse_path()
         ext_map = {"zip": ".zip", "tar.gz": ".tar.gz", "tar.bz2": ".tar.bz2", "7z": ".7z"}
-        output_path = os.path.join(desktop, f"归档{ext_map[fmt]}")
+        output_path = os.path.join(base_dir, f"归档{ext_map[fmt]}")
     else:
-        output_path = os.path.abspath(output_path)
+        output_path, err = check_path(output_path)
+        if err:
+            return err
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 

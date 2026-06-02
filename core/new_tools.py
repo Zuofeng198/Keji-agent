@@ -10,9 +10,18 @@ import datetime
 import statistics
 import tempfile
 import subprocess
+from pathlib import Path
 from typing import Optional
 
 from core.tools import register_tool
+from core.path_policy import (
+    check_path,
+    default_browse_path,
+    list_allowed_directories as _list_allowed_directories,
+    run_code_sandbox_preamble,
+)
+
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 from core.document.parser import parse_document, is_supported, get_file_metadata
 from core.document.indexer import get_indexer
 from core.rag.vector_store import get_vector_store
@@ -33,14 +42,16 @@ from core.database.db import get_db
     timeout=600,
 )
 def run_code(code: str) -> str:
-    # 确保 core 模块可导入
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    project_root = _PROJECT_ROOT
 
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8")
     # 分段写入，避免 f-string 花括号转义问题
     tmp.write("import sys\n")
     tmp.write(f"sys.path.insert(0, {project_root!r})\n")
     tmp.write("sys.stdout.reconfigure(encoding='utf-8', errors='replace')\n")
+    preamble = run_code_sandbox_preamble(Path(project_root))
+    if preamble:
+        tmp.write(preamble)
     tmp.write("""
 try:
     import openpyxl.cell.cell as _oc
@@ -126,6 +137,17 @@ sys.stdout.flush()
 
 
 @register_tool(
+    name="list_allowed_directories",
+    description="列出当前全局文件沙箱允许访问的目录（与设置页「文件访问范围」一致）。回答用户「能访问哪些路径」时优先调用本工具。",
+    parameters={},
+    category="filesystem",
+    timeout=5,
+)
+def list_allowed_directories() -> str:
+    return _list_allowed_directories()
+
+
+@register_tool(
     name="browse_files",
     description="浏览电脑上的文件夹内容，列出目录下的文件和子文件夹",
     parameters={
@@ -139,8 +161,10 @@ sys.stdout.flush()
 )
 def browse_files(path: str = "") -> str:
     if not path:
-        path = os.path.expanduser("~\\Desktop")
-    path = os.path.abspath(path)
+        path = default_browse_path()
+    path, err = check_path(path, project_root=_PROJECT_ROOT, must_exist=True, must_be_dir=True)
+    if err:
+        return err
 
     if not os.path.exists(path):
         return f"错误：路径不存在「{path}」"
@@ -190,7 +214,10 @@ def browse_files(path: str = "") -> str:
 )
 def search_files(pattern: str, folder: str = "", max_results: int = 10) -> str:
     if not folder:
-        folder = os.path.expanduser("~\\Desktop")
+        folder = default_browse_path()
+    folder, err = check_path(folder, project_root=_PROJECT_ROOT, must_exist=True, must_be_dir=True)
+    if err:
+        return err
     if not os.path.isdir(folder):
         return f"错误：文件夹不存在「{folder}」"
 
@@ -244,6 +271,9 @@ def read_document(path: str = "", file_path: str = "", document_path: str = "", 
         path = document_path
     if filepath and not path:
         path = filepath
+    path, err = check_path(path, project_root=_PROJECT_ROOT, must_exist=True, must_be_file=True) if path else (None, "错误：请提供文件路径")
+    if err:
+        return err
     if not path:
         return "错误：请提供文件路径"
     path = os.path.abspath(path)
@@ -1043,7 +1073,9 @@ def format_data(data: str, operation: str = "head", params: str = "5") -> str:
     timeout=10,
 )
 def create_folder(path: str) -> str:
-    path = os.path.abspath(path)
+    path, err = check_path(path, project_root=_PROJECT_ROOT)
+    if err:
+        return err
     try:
         os.makedirs(path, exist_ok=True)
         return f"✅ 文件夹已创建: {path}"
@@ -1073,7 +1105,9 @@ def delete_file(path: str, confirm: bool = False) -> str:
     import shutil
     import stat
 
-    path = os.path.abspath(path)
+    path, err = check_path(path, project_root=_PROJECT_ROOT, must_exist=True, must_be_file=True)
+    if err:
+        return err
 
     if not confirm:
         return f"⚠️ 请确认是否要删除「{path}」？如需删除，请设置 confirm=true"

@@ -365,8 +365,21 @@ class AgentRunner:
                 tool_events.extend(new_events)
                 context.tool_results = list(results)
                 context.tool_events = list(new_events)
+                executed_ids = {tc.id for tc in effective_tool_calls}
+                blocked_msg = (
+                    "工具调用已被系统阻止（自检未通过或验证待完成）。"
+                    "请根据上方的系统提示向用户说明，勿重复调用同一工具。"
+                )
+                result_by_id = {
+                    tc.id: res
+                    for tc, res in zip(effective_tool_calls, results)
+                }
                 completed_tool_results: list[dict[str, Any]] = []
-                for tool_call, result in zip(tool_calls, results):
+                for tool_call in tool_calls:
+                    if tool_call.id not in executed_ids:
+                        result = blocked_msg
+                    else:
+                        result = result_by_id[tool_call.id]
                     if isinstance(fatal_error, AskUserInterrupt) and tool_call.name == "ask_user":
                         continue
                     tool_message = {

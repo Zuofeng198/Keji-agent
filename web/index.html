@@ -156,6 +156,7 @@
           <div class="input-row">
             <textarea id="chatInput" rows="1" placeholder="输入消息，按 Enter 发送...（支持拖拽文件到此处）" onkeydown="onChatKeydown(event)"></textarea>
             <button class="upload-btn" id="uploadBtn" onclick="document.getElementById('fileInput').click()" title="上传文件">+</button>
+            <button class="qc-tool-btn" id="compactChatBtn" onclick="compactChatHistory()" title="压缩对话历史">📦</button>
             <button class="qc-tool-btn" id="qcToggleBtn" onclick="toggleQuickCmds()" title="快捷指令">/</button>
             <button class="send-btn" id="sendBtn" onclick="sendChat()">发送</button>
             <button class="stop-btn" id="stopBtn" onclick="stopStreaming()" style="display:none">⏹ 停止</button>
@@ -406,6 +407,61 @@
             <i class="icon-fa fa-solid fa-trash-can" style="margin-right:6px"></i>一键清空知识库
           </button>
           <div style="font-size:11px;color:var(--text-secondary);margin-top:6px">删除所有已索引的文档和向量数据，此操作不可恢复</div>
+        </div>
+      </div>
+      <div class="settings-group">
+        <h3>
+          <span class="icon-emoji">📦</span>
+          <i class="icon-fa fa-solid fa-box-archive" style="margin-right:4px"></i> 对话上下文
+        </h3>
+        <div class="settings-row">
+          <div><label>自动压缩长对话</label><div class="desc">超过阈值时用 AI 摘要旧消息，保留最近几轮原文</div></div>
+          <label style="position:relative;display:inline-block;width:44px;height:24px;cursor:pointer">
+            <input type="checkbox" id="setAutoCompact" style="opacity:0;width:0;height:0">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <div><label>自动压缩阈值（tokens）</label><div class="desc">约 60000 ≈ 24 万字符历史；可按模型调小</div></div>
+          <input type="number" id="setCompactThreshold" value="60000" min="10000" step="5000" style="width:140px">
+        </div>
+        <div class="settings-row">
+          <div><label>剪枝旧工具输出</label><div class="desc">不调用 LLM，将较早的工具结果替换为短摘要</div></div>
+          <label style="position:relative;display:inline-block;width:44px;height:24px;cursor:pointer">
+            <input type="checkbox" id="setPruneTools" checked style="opacity:0;width:0;height:0">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="settings-group">
+        <h3>
+          <span class="icon-emoji">📂</span>
+          <i class="icon-fa fa-solid fa-folder-open" style="margin-right:4px"></i> 文件访问范围（全局沙箱）
+        </h3>
+        <div class="settings-row" style="align-items:flex-start">
+          <div><label>允许目录</label><div class="desc">每行一个路径；约束 MCP 文件工具、浏览/删除/读文档、run_code、网页文件页等（不仅 MCP）</div></div>
+          <textarea id="setMcpDirs" rows="5" style="min-width:320px;max-width:480px;font-family:monospace;font-size:12px;padding:8px;border:1px solid var(--border);border-radius:6px" placeholder="knowledge&#10;data"></textarea>
+        </div>
+        <div class="settings-row">
+          <div><label>始终包含知识库目录</label></div>
+          <label style="position:relative;display:inline-block;width:44px;height:24px;cursor:pointer">
+            <input type="checkbox" id="setMcpIncludeKnowledge" checked style="opacity:0;width:0;height:0">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <div><label>始终包含 data 目录</label></div>
+          <label style="position:relative;display:inline-block;width:44px;height:24px;cursor:pointer">
+            <input type="checkbox" id="setMcpIncludeData" checked style="opacity:0;width:0;height:0">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <div><label>当前生效路径</label></div>
+          <span id="setMcpResolvedHint" style="font-size:11px;color:var(--text-muted);max-width:480px;text-align:right;word-break:break-all">—</span>
+        </div>
+        <div style="padding:8px 0 12px;text-align:center">
+          <button class="btn btn-secondary" type="button" onclick="reloadMcpFilesystem()">应用 MCP 目录（无需重启）</button>
         </div>
       </div>
       <div class="settings-group">

@@ -346,10 +346,31 @@ class ComplianceHook(AgentHook):
     """
 
     COMPLEX_TOOLS = frozenset({"run_code", "db_execute_query", "create_document", "create_table"})
-    # A4: 扩展前缀覆盖全部 MCP 工具组
+    # 只读/查询类工具不触发自检，避免阻断 list_allowed_directories 等
+    SAFE_TOOLS = frozenset({
+        "list_allowed_directories",
+        "browse_files",
+        "search_files",
+        "read_document",
+        "read_file",
+        "create_folder",
+        "delete_file",
+        "mcp_filesystem_list_allowed_directories",
+        "mcp_filesystem_list_directory",
+        "mcp_filesystem_get_file_info",
+        "mcp_filesystem_read_text_file",
+        "mcp_filesystem_read_file",
+        "mcp_filesystem_read_media_file",
+        "mcp_filesystem_read_multiple_files",
+        "mcp_filesystem_create_directory",
+        "mcp_filesystem_write_file",
+        "mcp_filesystem_edit_file",
+        "mcp_filesystem_move_file",
+    })
+    # A4: 数据分析/办公类 MCP 触发自检；filesystem 已由全局沙箱约束，不再拦截建目录等
     COMPLEX_PREFIXES = frozenset({
         "mcp_quack_", "mcp_engineer-your-data_",
-        "mcp_filesystem_", "mcp_excel_", "mcp_doc-tools_",
+        "mcp_excel_", "mcp_doc-tools_",
         "mcp_charts_", "mcp_memdb_", "mcp_image-gen_",
     })
     REPORT_TOOLS = frozenset({"create_document", "create_table", "create_presentation"})
@@ -382,6 +403,8 @@ class ComplianceHook(AgentHook):
 
     def _has_complex(self, names: list[str]) -> bool:
         for n in names:
+            if n in self.SAFE_TOOLS:
+                continue
             if n in self.COMPLEX_TOOLS:
                 return True
             for p in self.COMPLEX_PREFIXES:
@@ -391,6 +414,19 @@ class ComplianceHook(AgentHook):
 
     def _has_report(self, names: list[str]) -> bool:
         return any(n in self.REPORT_TOOLS for n in names)
+
+    def _only_safe_tools(self, names: list[str]) -> bool:
+        if not names:
+            return False
+        for n in names:
+            if n in self.SAFE_TOOLS:
+                continue
+            if n in self.COMPLEX_TOOLS:
+                return False
+            for p in self.COMPLEX_PREFIXES:
+                if n.startswith(p):
+                    return False
+        return True
 
     # A3: 判断是否需要复检
     def _should_recheck(self) -> bool:
@@ -502,16 +538,33 @@ class ComplianceHook(AgentHook):
                         self._sse.emit("selfcheck_result", passed=True,
                                        summary=f"通过 {report.passed_count}/{len(report.results)} 项")
                 else:
-                    # 自检失败 → 阻止本轮所有工具执行
-                    ctx.tool_calls.clear()
                     failed = [r.label for r in report.results if not r.passed]
-                    label = "SELF-CHECK FAILED — 工具已阻止"
-                    content = (report.format_text() +
-                               f"\n\n以下检查项未通过: {', '.join(failed)}。"
-                               "工具执行已被自动阻止。请先向用户报告异常，等待指示。")
-                    if self._sse:
-                        self._sse.emit("selfcheck_result", passed=False,
-                                       summary=f"失败 {report.failed_count}/{len(report.results)} 项")
+                    if self._only_safe_tools(names):
+                        label = "SELF-CHECK WARNING"
+                        content = (
+                            report.format_text()
+                            + f"\n\n未通过: {', '.join(failed)}。"
+                            "当前为文件/目录类操作，已放行执行（不依赖可选 MCP）。"
+                        )
+                        self._selfcheck_done = True
+                        if self._sse:
+                            self._sse.emit(
+                                "selfcheck_result",
+                                passed=True,
+                                summary=f"警告放行 {report.passed_count}/{len(report.results)}",
+                            )
+                    else:
+                        ctx.tool_calls.clear()
+                        label = "SELF-CHECK FAILED — 工具已阻止"
+                        content = (report.format_text() +
+                                   f"\n\n以下检查项未通过: {', '.join(failed)}。"
+                                   "工具执行已被自动阻止。请先向用户报告异常，等待指示。")
+                        if self._sse:
+                            self._sse.emit(
+                                "selfcheck_result",
+                                passed=False,
+                                summary=f"失败 {report.failed_count}/{len(report.results)} 项",
+                            )
             except Exception as e:
                 # A1: 异常时保持 _selfcheck_done = False，允许后续重试
                 self._selfcheck_done = False
@@ -731,9 +784,121 @@ class KejiAdapter:
         logger.info("Lazy tools: {} direct + __tool__ dispatcher", len(DIRECT_TOOLS) + 1)
         return t
 
+    def _mcp_tool_prefix(self, server_name: str) -> str:
+        return f"mcp_{server_name}_"
+
+    async def _close_mcp_server(self, server_name: str) -> None:
+        """仅关闭并注销某一 MCP 服务的工具。"""
+        stack = self._mcp_stacks.pop(server_name, None)
+        if stack is not None:
+            try:
+                await stack.aclose()
+            except Exception:
+                pass
+        prefix = self._mcp_tool_prefix(server_name)
+        n = self.tools.unregister_prefix(prefix)
+        if n:
+            logger.info("MCP {}: 已注销 {} 个工具", server_name, n)
+        self._refresh_lazy_tool_names()
+
+    def _refresh_lazy_tool_names(self) -> None:
+        for tool in self.lazy_tools._tools.values():
+            if hasattr(tool, "_all_names"):
+                tool._all_names = list(self.tools._tools.keys())
+                break
+
+    @staticmethod
+    def _mcp_server_config_from_dict(cfg: dict):
+        from dataclasses import dataclass
+
+        @dataclass
+        class _MCPServerConfig:
+            type: str | None = None
+            command: str = ""
+            args: list = None
+            env: dict = None
+            url: str = ""
+            headers: dict = None
+            tool_timeout: int = 30
+            enabled_tools: list = None
+
+            def __post_init__(self):
+                if self.args is None:
+                    self.args = []
+                if self.env is None:
+                    self.env = {}
+                if self.headers is None:
+                    self.headers = {}
+                if self.enabled_tools is None:
+                    self.enabled_tools = ["*"]
+
+        return _MCPServerConfig(
+            type=cfg.get("type"),
+            command=cfg.get("command", ""),
+            args=cfg.get("args", []),
+            env=cfg.get("env", {}),
+            url=cfg.get("url", ""),
+            headers=cfg.get("headers", {}),
+            tool_timeout=cfg.get("tool_timeout", 30),
+            enabled_tools=cfg.get("enabled_tools", ["*"]),
+        )
+
+    async def reload_filesystem_mcp(self) -> list[str]:
+        """仅重连 filesystem MCP（改目录时够用，避免重连全部 npx 服务）。"""
+        from core.mcp_paths import apply_filesystem_args_to_mcp_servers, dirs_for_display
+
+        await self._close_mcp_server("filesystem")
+
+        mcp_servers = apply_filesystem_args_to_mcp_servers(
+            self.config.get("mcp_servers", {}),
+            self.config,
+            self.project_root,
+        )
+        fs_cfg = mcp_servers.get("filesystem")
+        if not fs_cfg:
+            return dirs_for_display(self.config, self.project_root)
+
+        try:
+            import mcp  # noqa: F401
+        except ImportError:
+            logger.warning("MCP package not installed, skipping filesystem reload")
+            return dirs_for_display(self.config, self.project_root)
+
+        from nanobot.agent.tools.mcp import connect_mcp_servers
+
+        server = self._mcp_server_config_from_dict(fs_cfg)
+        stacks = await connect_mcp_servers({"filesystem": server}, self.tools)
+        self._mcp_stacks.update(stacks)
+        self._refresh_lazy_tool_names()
+        logger.info("MCP filesystem: 已单独重连")
+        return dirs_for_display(self.config, self.project_root)
+
+    async def reload_mcp_servers(self, *, full: bool = False) -> list[str]:
+        """重连 MCP。默认仅 filesystem；full=True 时重连全部（较慢）。"""
+        if not full:
+            return await self.reload_filesystem_mcp()
+        await self.close_mcp()
+        await self._connect_mcp_servers()
+        from core.mcp_paths import dirs_for_display
+        return dirs_for_display(self.config, self.project_root)
+
+    async def _prepare_session_for_chat(self, session_id: str) -> str | None:
+        """自动压缩过长会话；返回可展示给用户的提示。"""
+        if not session_id:
+            return None
+        from core.context_compact import maybe_auto_compact_before_chat
+        return await maybe_auto_compact_before_chat(
+            self.session_manager, session_id, self.provider, self.config,
+        )
+
     async def _connect_mcp_servers(self):
         """连接配置的 MCP 服务器并注册其工具"""
-        mcp_servers = self.config.get("mcp_servers", {})
+        from core.mcp_paths import apply_filesystem_args_to_mcp_servers
+        mcp_servers = apply_filesystem_args_to_mcp_servers(
+            self.config.get("mcp_servers", {}),
+            self.config,
+            self.project_root,
+        )
         if not mcp_servers:
             return
         # 检查 mcp 包是否安装
@@ -744,42 +909,13 @@ class KejiAdapter:
             return
         from nanobot.agent.tools.mcp import connect_mcp_servers
         try:
-            from dataclasses import dataclass
-            @dataclass
-            class _MCPServerConfig:
-                type: str | None = None
-                command: str = ""
-                args: list = None
-                env: dict = None
-                url: str = ""
-                headers: dict = None
-                tool_timeout: int = 30
-                enabled_tools: list = None
-                def __post_init__(self):
-                    if self.args is None: self.args = []
-                    if self.env is None: self.env = {}
-                    if self.headers is None: self.headers = {}
-                    if self.enabled_tools is None: self.enabled_tools = ["*"]
-
-            servers = {}
-            for name, cfg in mcp_servers.items():
-                servers[name] = _MCPServerConfig(
-                    type=cfg.get("type"),
-                    command=cfg.get("command", ""),
-                    args=cfg.get("args", []),
-                    env=cfg.get("env", {}),
-                    url=cfg.get("url", ""),
-                    headers=cfg.get("headers", {}),
-                    tool_timeout=cfg.get("tool_timeout", 30),
-                    enabled_tools=cfg.get("enabled_tools", ["*"]),
-                )
+            servers = {
+                name: self._mcp_server_config_from_dict(cfg)
+                for name, cfg in mcp_servers.items()
+            }
             if servers:
                 self._mcp_stacks = await connect_mcp_servers(servers, self.tools)
-                # 更新 __tool__ 的工具列表，让模型知道 MCP 工具可用
-                for tool in self.lazy_tools._tools.values():
-                    if hasattr(tool, '_all_names'):
-                        tool._all_names = list(self.tools._tools.keys())
-                        break
+                self._refresh_lazy_tool_names()
                 # quack/excel 工具通过 __tool__ 的枚举调用，不单独注册为独立 function，
                 # 减少 LLM 收到的函数定义数量，避免模型过载。
                 for name in servers:
@@ -816,9 +952,19 @@ class KejiAdapter:
         logger.warning("No active session found for cancel: {}", session_id)
         return False
 
+    def _filesystem_allowed_roots(self) -> list[Path]:
+        from core.path_policy import get_allowed_roots
+        return get_allowed_roots(self.config, self.project_root)
+
     def _build_tools(self) -> ToolRegistry:
         t = ToolRegistry()
-        t.register(ExecTool(working_dir=str(self.project_root), timeout=60))
+        roots = self._filesystem_allowed_roots()
+        root_strs = [str(p) for p in roots]
+        t.register(ExecTool(
+            working_dir=str(self.project_root),
+            timeout=60,
+            allowed_roots=root_strs,
+        ))
         # 从 config.yaml 读取搜索配置
         ws_cfg = self.config.get("web_search", {})
         ws_provider = ws_cfg.get("provider", "duckduckgo")
@@ -832,9 +978,22 @@ class KejiAdapter:
             if ws_provider == "tavily" and not ws_api_key:
                 logger.warning("Web search: tavily configured but no api_key, falling back to duckduckgo")
         t.register(WebFetchTool())
-        t.register(ReadFileTool(workspace=self.project_root))
-        t.register(GlobTool(workspace=self.project_root))
-        t.register(GrepTool(workspace=self.project_root))
+        fs_kw = dict(workspace=self.project_root)
+        if roots:
+            fs_kw["allowed_dir"] = roots[0]
+            if len(roots) > 1:
+                fs_kw["extra_allowed_dirs"] = roots[1:]
+        from nanobot.agent.tools.filesystem import (
+            EditFileTool,
+            ListDirTool,
+            WriteFileTool,
+        )
+        t.register(ReadFileTool(**fs_kw))
+        t.register(WriteFileTool(**fs_kw))
+        t.register(EditFileTool(**fs_kw))
+        t.register(ListDirTool(**fs_kw))
+        t.register(GlobTool(**fs_kw))
+        t.register(GrepTool(**fs_kw))
         t.register(SelfCheckTool(
             tool_registry=t,
             project_root=self.project_root,
@@ -850,13 +1009,26 @@ class KejiAdapter:
             content += "\n\n上传文件:\n" + "\n".join(f"- {f}" for f in files)
         history = []
         try:
+            from core.context_compact import get_context_settings, prune_history_messages
             s = self.session_manager.get_or_create(sid or "cli:default")
             history = s.get_history(max_messages=20, include_timestamps=False)
+            opts = get_context_settings(self.config)
+            history = prune_history_messages(history, opts["prune_tool_results"])
         except Exception:
             pass
         import datetime
         today = datetime.date.today().strftime("%Y年%m月%d日")
         sys_prompt = load_system_prompt() + f"\n\n## 当前日期\n今天是 {today}。搜索新闻时务必使用今天的日期作为搜索关键词。"
+        roots = self._filesystem_allowed_roots()
+        if roots:
+            dirs_text = "\n".join(f"- {p}" for p in roots)
+            sys_prompt += (
+                "\n\n## 文件访问范围（全局沙箱）\n"
+                "仅可读写下列目录及其子目录；访问其他路径会被拒绝。\n"
+                f"{dirs_text}\n"
+                "查询完整列表可调用工具 `list_allowed_directories`（优先于 MCP 同名工具）。"
+                "列目录请使用绝对路径或 `knowledge`/`data` 等相对路径，勿对 `glob` 使用 `.`（表示项目根，可能越界）。"
+            )
         msgs = [{"role": "system", "content": sys_prompt}]
 
         # 新会话自动填充默认技能
@@ -898,6 +1070,8 @@ class KejiAdapter:
 
     async def chat(self, query: str, sid: str = "", files: list[str] | None = None) -> str:
         from core.security.context import set_request_context
+        sk_pre = sid or "cli:default"
+        await self._prepare_session_for_chat(sk_pre)
         msgs, sk = self._build_msgs(query, sid, files)
         set_request_context(session_id=sk, actor="api")
         runner = AgentRunner(self.provider)
@@ -938,9 +1112,13 @@ class KejiAdapter:
 
     async def chat_stream(self, query: str, sid: str = "", files: list[str] | None = None) -> AsyncGenerator[str, None]:
         from core.security.context import set_request_context
+        sk_pre = sid or "cli:default"
+        compact_note = await self._prepare_session_for_chat(sk_pre)
         msgs, sk = self._build_msgs(query, sid, files)
         set_request_context(session_id=sk, actor="api")
         q: asyncio.Queue[str] = asyncio.Queue()
+        if compact_note:
+            await q.put(json.dumps({"phase": "system_notice", "message": compact_note}, ensure_ascii=False))
         done = asyncio.Event()
         sse_hook = SSEHook(q)
         compliance_hook = ComplianceHook(self.tools, self.project_root, self.config, sse_hook=sse_hook)

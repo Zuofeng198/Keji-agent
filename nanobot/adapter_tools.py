@@ -117,6 +117,7 @@ TOOL_DEFS: list[tuple[str, str, dict, list[str] | None]] = [
      {"path": {"type": "string"}, "confirm": {"type": "boolean", "description": "确认删除"}},
      ["path", "confirm"]),
     ("knowledge_stats", "知识库统计", {}, []),
+    ("list_allowed_directories", "列出全局文件沙箱允许访问的目录", {}, []),
 
     # ── 基础工具 ──
     ("get_time", "获取当前日期时间", {}, []),

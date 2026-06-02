@@ -28,16 +28,26 @@ def _resolve_path(
     extra_allowed_dirs: list[Path] | None = None,
 ) -> Path:
     """Resolve path against workspace (if relative) and enforce directory restriction."""
-    p = Path(path).expanduser()
-    if not p.is_absolute() and workspace:
-        p = workspace / p
+    raw = str(path or "").strip()
+    norm = raw.replace("\\", "/")
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        if allowed_dir and norm in ("", ".", "./"):
+            p = allowed_dir / "."
+        elif workspace:
+            p = workspace / p
+        elif allowed_dir:
+            p = allowed_dir / p
     resolved = p.resolve()
     if allowed_dir:
         media_path = get_media_dir().resolve()
-        all_dirs = [allowed_dir] + [media_path] + (extra_allowed_dirs or []) 
+        all_dirs = [allowed_dir] + [media_path] + (extra_allowed_dirs or [])
         if not any(_is_under(resolved, d) for d in all_dirs):
+            hint = "、".join(str(d) for d in all_dirs[:6])
+            if len(all_dirs) > 6:
+                hint += " …"
             raise PermissionError(
-                f"Path {path} is outside allowed directory {allowed_dir}"
+                f"Path {path} is outside allowed directories ({hint})"
                 + _FS_WORKSPACE_BOUNDARY_NOTE
             )
     return resolved
