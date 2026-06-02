@@ -1,0 +1,11 @@
+{
+  "name": "deck-export-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Export scripts for the deck presentation skill",
+  "dependencies": {
+    "puppeteer": "^24.0.0",
+    "pptxgenjs": "^3.12.0"
+  }
+}

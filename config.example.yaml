@@ -1,0 +1,150 @@
+# 复制为 config.yaml 后填入真实密钥（config.yaml 已在 .gitignore 中，不会提交到 Git）
+# cp config.example.yaml config.yaml
+
+models:
+  default: deepseek
+
+  deepseek:
+    base_url: https://api.deepseek.com
+    api_key: ${DEEPSEEK_API_KEY}
+    model: deepseek-v4-flash
+    timeout: 60
+
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key: ${OPENAI_API_KEY}
+    model: gpt-4o-mini
+    timeout: 60
+
+  ollama:
+    base_url: http://localhost:11434
+    model: qwen2.5:7b
+    timeout: 120
+
+web_search:
+  provider: tavily
+  api_key: ${TAVILY_API_KEY}
+
+agent:
+  max_tool_rounds: 80
+  max_history_tokens: 131072
+  temperature: 0.7
+  stream: true
+  use_knowledge: true
+  knowledge_top_k: 3
+  tool_timeout: 120
+  tool_max_retries: 2
+  tool_retry_backoff: 2
+  default_skills: []
+
+tools:
+  enabled:
+    - run_code
+    - get_time
+    - calculator
+    - read_document
+    - query_knowledge
+    - index_knowledge
+    - knowledge_stats
+    - create_document
+    - create_table
+    - create_presentation
+    - analyze_data
+    - format_data
+    - delete_file
+    - remove_from_knowledge
+    - browse_archive
+    - extract_archive
+    - create_archive
+    - ocr_image
+    - ocr_pdf
+    - ocr_batch
+    - parse_email
+    - extract_email_attachments
+    - batch_parse_emails
+    - organize_files
+    - rename_files
+    - deduplicate_files
+    - etl_pipeline
+    - clean_data
+    - convert_data
+    - db_connect
+    - db_list_tables
+    - db_describe_table
+    - db_execute_query
+    - db_test_connection
+    - db_disconnect
+  plugin_dirs:
+    - core/tools
+  result_truncate: 3000
+
+knowledge:
+  vector_db_path: data/vector_db
+  chunk_size: 500
+  chunk_overlap: 100
+  retrieval_count: 5
+  embedding_model: nomic-embed-text
+
+database:
+  path: data/keji.db
+
+session:
+  ttl: 3600
+
+logging:
+  level: INFO
+  file: logs/agent.log
+  format: json
+
+mcp_servers:
+  filesystem:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "./"]
+
+  memdb:
+    command: npx
+    args: ["-y", "@j0hanz/memdb"]
+
+  excel:
+    command: npx
+    args: ["-y", "@negokaz/excel-mcp-server"]
+    tool_timeout: 120
+
+  charts:
+    command: npx
+    args: ["-y", "mcp-echarts"]
+    tool_timeout: 60
+
+  doc-tools:
+    command: npx
+    args: ["-y", "@puchunjie/doc-tools-mcp"]
+
+  image-gen:
+    command: npx
+    args: ["-y", "@pollinations/model-context-protocol"]
+
+  quack:
+    command: node
+    args: ["--experimental-strip-types", "mcp/quack-mcp-main/src/index.ts"]
+    env:
+      NODE_PATH: "mcp/quack-mcp-main/node_modules"
+
+  engineer-your-data:
+    command: python
+    args: ["-m", "src.server"]
+
+wechat:
+  session_path: data/wechat_session.json
+  channel_version: "1.0.2"
+
+channels:
+  feishu:
+    enabled: false
+    app_id: ""
+    app_secret: ""
+    encrypt_key: ""
+    verification_token: ""
+    allow_from: []
+    streaming: true
+    group_policy: mention
+    domain: feishu

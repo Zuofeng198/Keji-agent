@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@j0hanz/memdb": "^1.4.0",
+    "@modelcontextprotocol/server-filesystem": "^2026.1.14"
+  }
+}

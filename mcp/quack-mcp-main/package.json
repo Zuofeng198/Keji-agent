@@ -1,0 +1,36 @@
+{
+  "name": "quack-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for CSV analysis using DuckDB",
+  "main": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.ts",
+    "dev": "node --watch src/index.ts",
+    "test": "node --test tests/**/*.ts",
+    "lint": "npx --yes oxlint@latest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "duckdb": "^1.1.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.2"
+  },
+  "bin": {
+    "quack-mcp": "src/index.ts"
+  },
+  "keywords": [
+    "mcp",
+    "csv",
+    "duckdb",
+    "analysis"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

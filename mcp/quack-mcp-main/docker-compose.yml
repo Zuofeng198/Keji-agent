@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  quack-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: quack-mcp
+    volumes:
+      # Mount data directory for CSV access
+      - ./data:/app/data:ro
+      # Mount additional CSV files from host if needed
+      - ./csv-data:/app/csv-data:ro
+    environment:
+      - NODE_ENV=production
+    stdin_open: true
+    tty: true
+    # For stdio transport, we need to keep stdin/stdout available
+    command: ["node", "src/index.ts"]
+    
+  # Optional: Development service with hot reload
+  quack-mcp-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: quack-mcp-dev
+    volumes:
+      - ./src:/app/src:ro
+      - ./data:/app/data:ro
+      - ./csv-data:/app/csv-data:ro
+    environment:
+      - NODE_ENV=development
+    stdin_open: true
+    tty: true
+    command: ["node", "--watch", "src/index.ts"]

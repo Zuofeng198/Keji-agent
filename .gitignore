@@ -1,0 +1,44 @@
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+
+# Secrets & local config (keep config.yaml only on your machine)
+config.yaml
+.env
+.env.*
+
+# Runtime data
+data/
+sessions/
+logs/
+.memdb/
+.deepseek/
+
+# Build artifacts
+dist/
+build/
+*.spec
+
+# Logs & local test outputs
+*.log
+server_output.log
+response*.txt
+tavily_test.txt
+test_chat.json
+test_tavily.json
+test.docx
+
+# IDE / tooling
+.claude/
+
+# Accidental / OS junk
+%SystemDrive%/
+Thumbs.db
+.DS_Store

@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<title>科吉 AI 助手</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="stylesheet" href="/static/css/style.css?v=VERSION">
+<style>
+/* 快捷命令栏样式（内联防止缓存） */
+.qc-toggle{display:inline-flex;align-items:center;gap:4px;padding:5px 16px;font-size:13px;border:1px solid var(--border);border-radius:20px;background:var(--bg-card);color:var(--text-secondary);cursor:pointer;transition:all .15s;font-family:inherit;font-weight:500}
+.qc-toggle:hover{background:var(--primary-light);border-color:var(--primary);color:var(--primary)}
+.qc-toggle.open{background:var(--primary);border-color:var(--primary);color:#fff}
+.qc-panel{display:none;margin-top:8px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card);box-shadow:0 2px 12px rgba(0,0,0,.07)}
+.qc-panel.open{display:flex;flex-wrap:wrap;gap:6px}
+.qc-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 12px;font-size:12px;border:1px solid var(--border);border-radius:14px;background:var(--bg);color:var(--text);cursor:pointer;white-space:nowrap;transition:all .12s;font-family:inherit}
+.qc-btn:hover{background:var(--primary-light);border-color:var(--primary);color:var(--primary)}
+.qc-btn:active{transform:scale(.96)}
+.qc-btn .qc-cmd{font-family:'SF Mono','Cascadia Code',Consolas,monospace;font-weight:600;font-size:11px}
+.qc-btn .qc-desc{color:var(--text-secondary);font-size:11px}
+.qc-tool-btn{flex-shrink:0;width:36px;height:36px;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);color:var(--text-secondary);font-size:16px;font-weight:600;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.qc-tool-btn:hover{background:var(--primary-light);border-color:var(--primary);color:var(--primary)}
+.qc-tool-btn.open{background:var(--primary);border-color:var(--primary);color:#fff}
+/* 技能面板（内联防止缓存） */
+.skill-card.active{border-color:var(--success);background:#e8f5e9 !important}
+.skill-card-name .active-badge{display:none;font-size:11px;background:var(--success);color:#fff;padding:1px 6px;border-radius:4px;margin-left:6px;font-weight:400}
+.skill-card.active .skill-card-name .active-badge{display:inline}
+</style>
+<script>document.addEventListener('DOMContentLoaded',function(){var s=document.createElement('style');s.textContent='.skill-card.active{background:#e8f5e9 !important;border-color:#27ae60 !important}';document.head.appendChild(s);});</script>
+<body>
+
+<!-- ===== 侧边栏 ===== -->
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <h1>科吉</h1>
+    <div class="subtitle">企业级 AI 助手</div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-item active" data-page="chat" onclick="switchPage('chat')">
+      <span class="icon">
+        <span class="icon-emoji">💬</span>
+        <i class="icon-fa fa-solid fa-message"></i>
+      </span> 对话
+    </div>
+    <div class="nav-item" data-page="knowledge" onclick="switchPage('knowledge')">
+      <span class="icon">
+        <span class="icon-emoji">📚</span>
+        <i class="icon-fa fa-solid fa-bookmark"></i>
+      </span> 知识库
+    </div>
+    <div class="nav-item" data-page="files" onclick="switchPage('files')">
+      <span class="icon">
+        <span class="icon-emoji">📁</span>
+        <i class="icon-fa fa-solid fa-folder"></i>
+      </span> 文件浏览
+    </div>
+    <div class="nav-item" data-page="settings" onclick="switchPage('settings')">
+      <span class="icon">
+        <span class="icon-emoji">⚙️</span>
+        <i class="icon-fa fa-solid fa-sliders"></i>
+      </span> 设置
+    </div>
+    <div class="nav-item" data-page="database" onclick="switchPage('database')">
+      <span class="icon">
+        <span class="icon-emoji">🗄️</span>
+        <i class="icon-fa fa-solid fa-database"></i>
+      </span> 数据库
+    </div>
+    <div class="nav-item" data-page="stats" onclick="switchPage('stats')">
+      <span class="icon">
+        <span class="icon-emoji">📊</span>
+        <i class="icon-fa fa-solid fa-chart-simple"></i>
+      </span> 统计
+    </div>
+    <div class="nav-item" data-page="tools" onclick="switchPage('tools')">
+      <span class="icon">
+        <span class="icon-emoji">🔧</span>
+        <i class="icon-fa fa-solid fa-tools"></i>
+      </span> 工具
+    </div>
+  </nav>  </nav>
+  <div class="sidebar-mode">
+    <!-- Agent 模式已整合到自动流程中，无需手动切换 -->
+  </div>
+  
+  <div class="sidebar-footer">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusText">检查连接中...</span>
+  </div>
+</aside>
+
+<!-- ===== 主内容区 ===== -->
+<main class="main">
+
+  <!-- ===== 聊天页面 ===== -->
+  <div class="page active" id="page-chat">
+    <div class="page-header">
+      <div style="display:flex;align-items:center;gap:10px">
+        <button class="tool-menu-btn" id="toolMenuBtn" onclick="toggleToolPanel()" title="可用工具">
+          <span class="icon-emoji">🔧</span>
+          <i class="icon-fa fa-solid fa-wrench"></i>
+        </button>
+        <div>
+          <h2>
+            <span class="icon-emoji">💬</span>
+            <i class="icon-fa fa-solid fa-comments" style="margin-right:6px"></i>对话
+          </h2>
+          <p id="convTitle">新对话</p>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm btn-outline" id="debugBtn" onclick="toggleDebug()">
+          <span class="icon-emoji">🔧</span>
+          <i class="icon-fa fa-solid fa-bug" style="margin-right:4px"></i>调试
+        </button>
+        <button class="btn btn-sm btn-outline" onclick="openHistory()">
+          <span class="icon-emoji">📋</span>
+          <i class="icon-fa fa-solid fa-clock" style="margin-right:4px"></i>历史
+        </button>
+        <button class="btn btn-sm btn-outline" onclick="toggleSkillPanel()">
+          <span class="icon-emoji">🧠</span>
+          <i class="icon-fa fa-solid fa-brain" style="margin-right:4px"></i>技能
+        </button>
+        <button class="btn btn-sm btn-outline" onclick="newChat()">
+          <span class="icon-emoji">➕</span>
+          <i class="icon-fa fa-solid fa-plus" style="margin-right:4px"></i>新对话
+        </button>
+      </div>
+    </div>
+    <!-- 工具面板 -->
+    <div class="tool-panel" id="toolPanel">
+      <div class="tool-panel-inner" id="toolPanelInner"></div>
+    </div>
+    <div class="chat-body">
+      <!-- 左列：主聊天 -->
+      <div class="chat-col" id="leftCol">
+        <div class="drag-hint"><span class="icon-emoji">📁</span><i class="icon-fa fa-solid fa-folder"></i> 拖拽文件到此处上传</div>
+        <div class="chat-messages" id="chatMessages">
+        <div class="empty-state">
+          <div class="big-icon">
+          <span class="icon-emoji">👋</span>
+          <i class="icon-fa fa-solid fa-hand-wave"></i>
+        </div>
+          <h3>你好！我是科吉</h3>
+          <p>你的企业级 AI 助手。我可以帮你整理文件、搜索知识库、分析文档、回答问题。在下方输入框开始对话。</p>
+        </div>
+        </div>
+        <div class="chat-input">
+          <div class="upload-area" id="filePreview"></div>
+          <!-- 快捷命令栏 -->
+          <div class="quick-cmd-wrapper">
+            <div class="qc-panel" id="quickCmdBar" style="display:none"></div>
+          </div>
+          <div class="input-row">
+            <textarea id="chatInput" rows="1" placeholder="输入消息，按 Enter 发送...（支持拖拽文件到此处）" onkeydown="onChatKeydown(event)"></textarea>
+            <button class="upload-btn" id="uploadBtn" onclick="document.getElementById('fileInput').click()" title="上传文件">+</button>
+            <button class="qc-tool-btn" id="qcToggleBtn" onclick="toggleQuickCmds()" title="快捷指令">/</button>
+            <button class="send-btn" id="sendBtn" onclick="sendChat()">发送</button>
+            <button class="stop-btn" id="stopBtn" onclick="stopStreaming()" style="display:none">⏹ 停止</button>
+          </div>
+          <input type="file" id="fileInput" style="display:none" multiple onchange="handleFileSelect(event)">
+        </div>
+      </div>
+      <!-- 右列：分屏聊天 -->
+      <div class="chat-col split-col" id="rightCol">
+        <div class="split-header">
+          <h3>分屏对话</h3>
+          <button class="btn btn-sm btn-outline" onclick="closeSplit()">
+            <span class="icon-emoji">✕</span>
+            <i class="icon-fa fa-solid fa-xmark" style="margin-right:4px"></i>关闭
+          </button>
+        </div>
+        <div class="split-msgs" id="splitMessages"></div>
+        <div class="chat-input">
+          <div class="input-row">
+            <textarea id="splitInput" rows="1" placeholder="输入消息，按 Enter 发送..." onkeydown="onSplitKeydown(event)"></textarea>
+            <button class="send-btn" onclick="sendSplitChat()">发送</button>
+            <button class="stop-btn" id="splitStopBtn" onclick="stopSplitStreaming()" style="display:none">⏹ 停止</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="history-overlay" id="historyOverlay">
+      <div class="history-backdrop" onclick="closeHistory()"></div>
+      <div class="history-content">
+        <div class="ht-title">
+          <span>
+            <span class="icon-emoji">📋</span>
+            <i class="icon-fa fa-solid fa-clock"></i>
+          </span> 对话历史
+          <div>
+            <button class="btn btn-sm btn-outline" onclick="toggleMultiSelect()" id="htMultiBtn">
+              <span class="icon-emoji">☑</span>
+              <i class="icon-fa fa-solid fa-square-check" style="margin-right:4px"></i>多选
+            </button>
+            <span style="cursor:pointer;font-size:18px;margin-left:8px" onclick="closeHistory()">
+              <span class="icon-emoji">✕</span>
+              <i class="icon-fa fa-solid fa-xmark"></i>
+            </span>
+          </div>
+        </div>
+        <div class="ht-toolbar" id="htToolbar" style="display:none">
+          <button class="btn btn-sm btn-outline" onclick="selectAllHistory()">全选</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteSelected()">
+            <span class="icon-emoji">🗑️</span>
+            <i class="icon-fa fa-solid fa-trash-can" style="margin-right:4px"></i>删除所选
+          </button>
+          <button class="btn btn-sm btn-danger" onclick="deleteAllHistory()">
+            <span class="icon-emoji">🗑️</span>
+            <i class="icon-fa fa-solid fa-trash-can" style="margin-right:4px"></i>删除全部
+          </button>
+        </div>
+        <div class="ht-list" id="historyList"><div style="text-align:center;padding:30px;color:#999">点击加载</div></div>
+      </div>
+    </div>
+    <!-- 技能面板 -->
+    <div class="skill-panel" id="skillPanel">
+      <div class="skill-panel-backdrop" onclick="toggleSkillPanel()"></div>
+      <div class="skill-panel-content">
+        <div class="skill-panel-header">
+          <h3><span class="icon-emoji">🧠</span><i class="icon-fa fa-solid fa-brain"></i> 技能</h3>
+          <span style="cursor:pointer;font-size:18px" onclick="toggleSkillPanel()">
+            <span class="icon-emoji">✕</span>
+            <i class="icon-fa fa-solid fa-xmark"></i>
+          </span>
+        </div>
+        <div class="skill-panel-body" id="skillPanelBody">
+          <div style="text-align:center;padding:30px;color:var(--text-secondary)">加载中...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 知识库页面 ===== -->
+  <div class="page" id="page-knowledge">
+    <div class="page-header">
+      <div>
+        <h2>
+          <span class="icon-emoji">📚</span>
+          <i class="icon-fa fa-solid fa-bookmark" style="margin-right:6px"></i>知识库管理
+        </h2>
+        <p>管理文档索引，构建企业知识库</p>
+      </div>
+    </div>
+    <div class="kb-content">
+      <!-- 统计卡片行 -->
+      <div class="kb-stats" id="kbStats">
+        <div class="stat-card stat-docs"><div class="stat-icon"><span class="icon-emoji">📄</span><i class="icon-fa fa-solid fa-file-lines"></i></div><div class="stat-body"><div class="number">-</div><div class="label">文档总数</div></div></div>
+        <div class="stat-card stat-chunks"><div class="stat-icon"><span class="icon-emoji">🧩</span><i class="icon-fa fa-solid fa-puzzle-piece"></i></div><div class="stat-body"><div class="number">-</div><div class="label">文本块数</div></div></div>
+        <div class="stat-card stat-vectors"><div class="stat-icon"><span class="icon-emoji">🔮</span><i class="icon-fa fa-solid fa-cubes"></i></div><div class="stat-body"><div class="number">-</div><div class="label">向量数量</div></div></div>
+      </div>
+
+      <!-- 索引面板 -->
+      <div class="kb-index-card">
+        <div class="kb-index-title"><span class="icon-emoji">📥</span><i class="icon-fa fa-solid fa-cloud-arrow-down"></i> 索引新文档</div>
+        <div class="kb-index-row">
+          <input type="text" id="kbPath" placeholder="输入文件或文件夹路径，如 D:\docs\report.pdf" onkeydown="if(event.key==='Enter')indexFromInput()">
+          <button class="btn btn-primary" onclick="indexFromInput()" style="flex-shrink:0"><span class="icon-emoji">📥</span><i class="icon-fa fa-solid fa-cloud-arrow-down"></i> 索引到知识库</button>
+          <button class="btn btn-danger" id="kbCancelBtn" onclick="cancelIndexing()" style="display:none;flex-shrink:0"><span class="icon-emoji">⏹</span><i class="icon-fa fa-solid fa-stop"></i> 终止检索</button>
+        </div>
+      </div>
+
+      <!-- 搜索栏 -->
+      <div class="kb-search-bar">
+        <span class="kb-search-icon"><span class="icon-emoji">🔍</span><i class="icon-fa fa-solid fa-magnifying-glass"></i></span>
+        <input type="text" id="kbSearch" placeholder="搜索知识库中的文档内容..." onkeydown="if(event.key==='Enter')searchKnowledge()">
+        <button class="btn btn-sm btn-outline" onclick="toggleKbMultiSelect()" id="kbMultiBtn"><span class="icon-emoji">☑</span><i class="icon-fa fa-solid fa-check-square"></i> 多选</button>
+      </div>
+
+      <!-- 文档列表 -->
+      <div class="kb-doc-header">
+        <span>已索引文档</span>
+        <span id="kbDocCount" style="font-size:12px;color:var(--text-secondary)"></span>
+      </div>
+      <div class="kb-toolbar" id="kbToolbar" style="display:none;padding:8px 0;gap:8px">
+        <button class="btn btn-sm btn-outline" onclick="selectAllKbDocs()">全选</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteSelectedKbDocs()"><span class="icon-emoji">🗑️</span><i class="icon-fa fa-solid fa-trash-can"></i> 删除所选</button>
+      </div>
+      <div class="kb-doc-list" id="kbDocList"><div class="loading"><div class="spinner"></div>加载中...</div></div>
+    </div>
+  </div>
+
+  <!-- ===== 文件浏览页面 ===== -->
+  <div class="page" id="page-files">
+    <div class="page-header">
+      <div>
+        <h2>
+          <span class="icon-emoji">📁</span>
+          <i class="icon-fa fa-solid fa-folder-open" style="margin-right:6px"></i>文件浏览
+        </h2>
+        <p>浏览电脑文件，快速索引到知识库</p>
+      </div>
+    </div>
+    <div class="fb-content">
+      <div class="fb-path-bar">
+        <button class="nav-btn" onclick="goUpDir()" title="上一级"><span class="icon-emoji">⬆</span><i class="icon-fa fa-solid fa-arrow-up"></i></button>
+        <span class="path-text" id="fbPath">C:\</span>
+        <button class="nav-btn" onclick="refreshFiles()" title="刷新">
+          <span class="icon-emoji">🔄</span>
+          <i class="icon-fa fa-solid fa-rotate"></i>
+        </button>
+      </div>
+      <div class="fb-drives" id="fbDrives"></div>
+      <div class="fb-items" id="fbItems"><div class="loading"><div class="spinner"></div>加载中...</div></div>
+    </div>
+  </div>
+
+  <!-- ===== 设置页面 ===== -->
+  <div class="page" id="page-settings">
+    <div class="page-header">
+      <div>
+        <h2>
+          <span class="icon-emoji">⚙️</span>
+          <i class="icon-fa fa-solid fa-gear" style="margin-right:6px"></i>设置
+        </h2>
+        <p>配置模型、知识库和界面选项</p>
+      </div>
+    </div>
+    <div class="settings-content">
+      <div class="settings-group">
+        <h3>
+          <span class="icon-emoji">🤖</span>
+          <i class="icon-fa fa-solid fa-microchip" style="margin-right:4px"></i> 模型配置
+        </h3>
+        <div class="settings-row">
+          <div><label>模型类型</label><div class="desc">选择使用本地 Ollama 还是云端 API</div></div>
+          <select id="setModelType" onchange="toggleModelType()" style="width:200px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+            <option value="ollama">Ollama（本地）</option>
+            <option value="openai">OpenAI 兼容（云端）</option>
+          </select>
+        </div>
+        <!-- Ollama 设置 -->
+        <div id="ollamaSettings">
+          <div class="settings-row">
+            <div><label>Ollama 地址</label><div class="desc">Ollama 服务地址</div></div>
+            <input type="text" id="setOllamaUrl" value="http://localhost:11434">
+          </div>
+          <div class="settings-row">
+            <div><label>对话模型</label><div class="desc">用于聊天的模型名称</div></div>
+            <input type="text" id="setChatModel" value="qwen2.5:7b">
+          </div>
+        </div>
+        <!-- OpenAI 设置 -->
+        <div id="openaiSettings" style="display:none">
+          <div class="settings-row">
+            <div><label>API 地址</label><div class="desc">OpenAI 兼容 API 地址</div></div>
+            <input type="text" id="setOpenaiUrl" value="https://api.openai.com/v1">
+          </div>
+          <div class="settings-row">
+            <div><label>API Key</label><div class="desc">你的 API 密钥</div></div>
+            <input type="password" id="setOpenaiKey" value="" placeholder="sk-...">
+          </div>
+          <div class="settings-row">
+            <div><label>模型名称</label><div class="desc">OpenAI: gpt-4o-mini / DeepSeek: deepseek-chat / 硅基流动: Qwen/Qwen2.5-7B-Instruct 等</div></div>
+            <input type="text" id="setOpenaiModel" value="gpt-4o-mini">
+          </div>
+        </div>
+        <div class="settings-row">
+          <div><label>嵌入模型</label><div class="desc">用于知识库向量化（Ollama 模型名）</div></div>
+          <input type="text" id="setEmbedModel" value="nomic-embed-text">
+        </div>
+        <div style="padding:12px 0;text-align:center">
+          <button class="btn btn-primary" onclick="testModelConn()" id="testModelBtn">
+            <span class="icon-emoji">🔄</span>
+            <i class="icon-fa fa-solid fa-plug" style="margin-right:6px"></i>测试模型连接
+          </button>
+          <span id="testModelResult" style="margin-left:12px;font-size:13px"></span>
+        </div>
+      </div>
+      <div class="settings-group">
+        <h3>
+          <span class="icon-emoji">🧠</span>
+          <i class="icon-fa fa-solid fa-brain" style="margin-right:4px"></i> 知识库配置
+        </h3>
+        <div class="settings-row">
+          <div><label>分块大小</label><div class="desc">文档切分的文本块大小（字符数）</div></div>
+          <input type="number" id="setChunkSize" value="500">
+        </div>
+        <div class="settings-row">
+          <div><label>块重叠</label><div class="desc">相邻文本块之间的重叠字符数</div></div>
+          <input type="number" id="setOverlap" value="100">
+        </div>
+        <div class="settings-row">
+          <div><label>检索数量</label><div class="desc">每次检索返回的相关片段数</div></div>
+          <input type="number" id="setTopK" value="3">
+        </div>
+        <div style="padding:12px 0;text-align:center;border-top:1px solid var(--border);margin-top:8px">
+          <button class="btn btn-danger" onclick="clearAllKnowledge()" style="font-size:14px;padding:10px 24px">
+            <span class="icon-emoji">🗑️</span>
+            <i class="icon-fa fa-solid fa-trash-can" style="margin-right:6px"></i>一键清空知识库
+          </button>
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:6px">删除所有已索引的文档和向量数据，此操作不可恢复</div>
+        </div>
+      </div>
+      <div class="settings-group">
+        <h3>
+          <span class="icon-emoji">🎯</span>
+          <i class="icon-fa fa-solid fa-bullseye" style="margin-right:4px"></i> 显示选项
+        </h3>
+        <div class="settings-row">
+          <div><label>显示思考过程</label><div class="desc">在对话中显示模型的实时思考过程和工具调用日志</div></div>
+          <label style="position:relative;display:inline-block;width:44px;height:24px;cursor:pointer">
+            <input type="checkbox" id="setShowThinking" onchange="saveThinkingSetting()" style="opacity:0;width:0;height:0">
+            <span style="position:absolute;inset:0;background:#ccc;border-radius:12px;transition:0.3s" id="thinkingToggleTrack"></span>
+            <span style="position:absolute;left:3px;bottom:3px;width:18px;height:18px;background:#fff;border-radius:50%;transition:0.3s" id="thinkingToggleThumb"></span>
+          </label>
+        <div class="settings-row">
+          <div><label>图标主题</label><div class="desc">切换 Emoji 或 Font Awesome 图标风格</div></div>
+          <select id="setIconTheme" onchange="applyIconTheme(this.value)" style="width:160px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+            <option value="emoji">Emoji 风格</option>
+            <option value="fa">Font Awesome 风格</option>
+          </select>
+        </div>
+      </div>
+      <div class="settings-group">
+        <h3>
+          <span class="icon-emoji">🏢</span>
+          <i class="icon-fa fa-solid fa-building" style="margin-right:4px"></i> 企业微信
+        </h3>
+        <div class="settings-row">
+          <div><label>企业 ID（CorpID）</label><div class="desc">企业微信后台 → 我的企业 → 企业ID</div></div>
+          <input type="text" id="workCorpId" placeholder="ww..." style="width:220px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+        <div class="settings-row">
+          <div><label>AgentID</label><div class="desc">应用管理 → 自建应用 → AgentID</div></div>
+          <input type="text" id="workAgentId" placeholder="1000001" style="width:120px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+        <div class="settings-row">
+          <div><label>Secret</label><div class="desc">应用管理 → 自建应用 → Secret</div></div>
+          <input type="password" id="workSecret" placeholder="..." style="width:280px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+        <div style="padding:12px 0;text-align:center">
+          <button class="btn btn-primary" onclick="testWorkConn()"><i class="icon-fa fa-solid fa-plug" style="margin-right:6px"></i><span class="icon-emoji">🔌</span>测试连接</button>
+          <button class="btn btn-success" onclick="saveWorkConfig()" style="margin-left:8px"><i class="icon-fa fa-solid fa-floppy-disk" style="margin-right:6px"></i><span class="icon-emoji">💾</span>保存配置</button>
+          <span id="workTestResult" style="margin-left:12px;font-size:13px"></span>
+        </div>
+        <div class="settings-row">
+          <div><label>回调URL</label><div class="desc">企业微信后台 → 自建应用 → 配置回调URL（需要公网可达）</div></div>
+          <span id="workCallbackUrl" style="font-size:12px;color:var(--text-secondary);word-break:break-all">保存配置后自动生成</span>
+        </div>
+      </div>
+      <div class="settings-group">
+        <h3>
+          <span class="icon-emoji">ℹ️</span>
+          <i class="icon-fa fa-solid fa-circle-info" style="margin-right:4px"></i> 关于
+        </h3>
+        <div class="settings-row">
+          <div><label>版本</label></div>
+          <span style="font-size:14px;color:var(--primary);font-weight:600">1.0.0.1-Beta</span>
+        </div>
+        <div class="settings-row">
+          <div><label>说明</label></div>
+          <span style="font-size:13px;color:var(--text-secondary);text-align:right;max-width:300px">科吉 AI 助手 —— 企业级文档管理与智能对话平台</span>
+        </div>
+      </div>
+      <div style="text-align:center;padding:20px">
+        <button class="btn btn-primary" onclick="saveSettings()">
+          <span class="icon-emoji">💾</span>
+          <i class="icon-fa fa-solid fa-floppy-disk" style="margin-right:6px"></i>保存设置
+        </button>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <!-- ===== 数据库页面 ===== -->
+  <div class="page" id="page-database">
+    <div class="page-header">
+      <div>
+        <h2>
+          <span class="icon-emoji">🗄️</span>
+          <i class="icon-fa fa-solid fa-database" style="margin-right:6px"></i>数据库
+        </h2>
+        <p>连接企业数据库，自然语言查询数据</p>
+      </div>
+    </div>
+    <div class="db-body">
+      <!-- 左侧（主）：数据源管理 -->
+      <div class="db-main">
+        <div class="db-main-card">
+          <div class="db-section-header">
+            <h3>
+              <span class="icon-emoji">📡</span>
+              <i class="icon-fa fa-solid fa-server" style="margin-right:4px"></i>数据源管理
+            </h3>
+            <button class="btn btn-primary btn-sm" onclick="showDbConfigForm()"><span class="icon-emoji">➕</span><i class="icon-fa fa-solid fa-plus"></i> 新增</button>
+          </div>
+          <div id="dbConfigList" class="db-grid-3col"><div class="loading"><div class="spinner"></div>加载中...</div></div>
+        </div>
+      </div>
+      <!-- 右侧（侧栏）：智能问数 -->
+      <div class="db-side">
+        <div class="db-side-header">
+          <h3>
+            <span class="icon-emoji">🤖</span>
+            <i class="icon-fa fa-solid fa-robot" style="margin-right:4px"></i>智能问数
+          </h3>
+        </div>
+        <div class="db-side-select">
+          <select id="sqConfigSelect" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;background:var(--bg-card);color:var(--text)"><option value="">-- 选择数据源 --</option></select>
+        </div>
+        <div class="db-side-msgs" id="sqMessages">
+          <div class="db-side-empty">用自然语言提问，系统会自动生成SQL查询数据</div>
+        </div>
+        <div class="db-side-input">
+          <textarea id="sqInput" rows="2" placeholder="输入问题…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();executeSmartQuery()}"></textarea>
+          <button class="btn btn-primary" onclick="executeSmartQuery()">
+            <span class="icon-emoji">🚀</span>
+            <i class="icon-fa fa-solid fa-paper-plane"></i>
+          </button>
+        </div>
+        <div id="sqProgress" style="display:none;padding:8px 16px;font-size:12px;color:var(--text-secondary)"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 统计页面 ===== -->
+  <div class="page" id="page-stats">
+    <div class="page-header">
+      <div>
+        <h2>
+          <span class="icon-emoji">📊</span>
+          <i class="icon-fa fa-solid fa-chart-simple" style="margin-right:6px"></i>使用统计
+        </h2>
+        <p>所有对话的 token 消耗概览与趋势分析</p>
+      </div>
+    </div>
+
+    <div class="stats-body">
+      <!-- 统计卡片行 -->
+      <div class="stats-summary" id="statsSummary">
+        <div class="s-card" data-key="convs">
+          <div class="s-card-icon" style="background:linear-gradient(135deg,#f59e0b,#f97316)">
+            <span class="icon-emoji">💬</span><i class="icon-fa fa-solid fa-comments"></i>
+          </div>
+          <div class="s-card-body">
+            <div class="s-card-number" id="sNumConvs">-</div>
+            <div class="s-card-label">总对话数</div>
+          </div>
+        </div>
+        <div class="s-card" data-key="total">
+          <div class="s-card-icon" style="background:linear-gradient(135deg,#4f6ef7,#6366f1)">
+            <span class="icon-emoji">🔤</span><i class="icon-fa fa-solid fa-font"></i>
+          </div>
+          <div class="s-card-body">
+            <div class="s-card-number" id="sNumTotal">-</div>
+            <div class="s-card-label">总消耗</div>
+          </div>
+        </div>
+        <div class="s-card" data-key="prompt">
+          <div class="s-card-icon" style="background:linear-gradient(135deg,#7c4dff,#b388ff)">
+            <span class="icon-emoji">📝</span><i class="icon-fa fa-solid fa-pen"></i>
+          </div>
+          <div class="s-card-body">
+            <div class="s-card-number" id="sNumPrompt">-</div>
+            <div class="s-card-label">输入令牌</div>
+          </div>
+        </div>
+        <div class="s-card" data-key="completion">
+          <div class="s-card-icon" style="background:linear-gradient(135deg,#00c853,#69f0ae)">
+            <span class="icon-emoji">✅</span><i class="icon-fa fa-solid fa-check"></i>
+          </div>
+          <div class="s-card-body">
+            <div class="s-card-number" id="sNumCompletion">-</div>
+            <div class="s-card-label">输出令牌</div>
+          </div>
+        </div>
+        <div class="s-card" data-key="cached" style="display:none">
+          <div class="s-card-icon" style="background:linear-gradient(135deg,#00bcd4,#4dd0e1)">
+            <span class="icon-emoji">⚡</span><i class="icon-fa fa-solid fa-bolt"></i>
+          </div>
+          <div class="s-card-body">
+            <div class="s-card-number" id="sNumCached">-</div>
+            <div class="s-card-label">缓存命中</div>
+          </div>
+        </div>
+        <div class="s-card" data-key="cost">
+          <div class="s-card-icon" style="background:linear-gradient(135deg,#f44336,#e91e63)">
+            <span class="icon-emoji">💰</span><i class="icon-fa fa-solid fa-coins"></i>
+          </div>
+          <div class="s-card-body">
+            <div class="s-card-number" id="sNumCost">¥0</div>
+            <div class="s-card-label">预估花费 <span style="font-size:10px;opacity:0.6" id="sCostModelHint"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 主体：左图 + 右表 -->
+      <div class="stats-main">
+        <!-- 左列：时间筛选 + 图表 -->
+        <div class="stats-left">
+          <div class="stats-chart-card">
+            <div class="stats-filter" id="statsFilter">
+              <button class="filter-btn" data-range="today" onclick="setStatsFilter('today')">今天</button>
+              <button class="filter-btn" data-range="week" onclick="setStatsFilter('week')">本周</button>
+              <button class="filter-btn" data-range="month" onclick="setStatsFilter('month')">本月</button>
+              <button class="filter-btn active" data-range="all" onclick="setStatsFilter('all')">全部</button>
+            </div>
+            <div class="chart-donut-wrap">
+              <canvas id="donutChart" width="280" height="280"></canvas>
+              <div class="chart-donut-center" id="donutCenter">
+                <div class="chart-center-num" id="donutTotal">-</div>
+                <div class="chart-center-label">总消耗 tokens</div>
+              </div>
+            </div>
+            <div class="chart-legend" id="chartLegend">
+              <div class="legend-item" data-key="prompt">
+                <span class="legend-dot" style="background:#7c4dff"></span>
+                <span class="legend-label">输入令牌</span>
+                <span class="legend-num" id="legendPrompt">-</span>
+              </div>
+              <div class="legend-item" data-key="completion">
+                <span class="legend-dot" style="background:#00c853"></span>
+                <span class="legend-label">输出令牌</span>
+                <span class="legend-num" id="legendCompletion">-</span>
+              </div>
+              <div class="legend-item" data-key="cached">
+                <span class="legend-dot" style="background:#00bcd4"></span>
+                <span class="legend-label">缓存命中</span>
+                <span class="legend-num" id="legendCached">-</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右列：表格 -->
+        <div class="stats-right">
+          <div class="stats-table-wrap">
+            <div class="stats-table-header">
+              <h3><span class="icon-emoji">📋</span><i class="icon-fa fa-solid fa-table"></i> 对话详情</h3>
+              <div class="stats-sort" id="statsSort">
+                <span class="stats-sort-label">排序：</span>
+                <button class="stats-sort-btn active" data-sort="date" onclick="sortStatsTable('date')">按日期</button>
+                <button class="stats-sort-btn" data-sort="tokens" onclick="sortStatsTable('tokens')">按用量</button>
+                <button class="stats-sort-btn" data-sort="cost" onclick="sortStatsTable('cost')">按花费</button>
+              </div>
+            </div>
+            <div class="stats-table-scroll">
+              <table class="stats-table" id="statsTable">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th class="sortable" data-sort="title">对话</th>
+                    <th class="sortable" data-sort="date">日期</th>
+                    <th class="num sortable" data-sort="prompt">输入</th>
+                    <th class="num sortable" data-sort="completion">输出</th>
+                    <th class="num">缓存</th>
+                    <th class="num sortable" data-sort="total">总消耗</th>
+                    <th class="num sortable" data-sort="cost">花费</th>
+                    <th class="num">条数</th>
+                  </tr>
+                </thead>
+                <tbody id="statsTableBody"></tbody>
+              </table>
+            </div>
+            <div class="stats-empty" id="statsEmpty" style="display:none">
+              <div class="stats-empty-icon"><span class="icon-emoji">📭</span><i class="icon-fa fa-solid fa-inbox"></i></div>
+              <p>暂无统计数据</p>
+              <p class="stats-empty-hint">发送一条对话后，token 用量会自动记录</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ===== 工具统计页面 ===== -->
+  <div class="page" id="page-tools">
+    <div class="page-header">
+      <div>
+        <h2>
+          <span class="icon-emoji">🔧</span>
+          <i class="icon-fa fa-solid fa-tools" style="margin-right:6px"></i>工具统计
+        </h2>
+        <p>工具调用次数、耗时与 token 消耗全览</p>
+      </div>
+    </div>
+    <div class="stats-body">
+      <!-- 汇总卡片 -->
+      <div class="stats-summary" id="toolsStatsSummary">
+        <div class="s-card">
+          <div class="s-card-icon" style="background:linear-gradient(135deg,#4f6ef7,#6366f1)">
+            <span class="icon-emoji">📞</span><i class="icon-fa fa-solid fa-phone"></i>
+          </div>
+          <div class="s-card-body">
+            <div class="s-card-number" id="tsNumCalls">-</div>
+            <div class="s-card-label">总调用</div>
+          </div>
+        </div>
+        <div class="s-card">
+          <div class="s-card-icon" style="background:linear-gradient(135deg,#00c853,#69f0ae)">
+            <span class="icon-emoji">✅</span><i class="icon-fa fa-solid fa-check-circle"></i>
+          </div>
+          <div class="s-card-body">
+            <div class="s-card-number" id="tsNumSuccess">-</div>
+            <div class="s-card-label">成功</div>
+          </div>
+        </div>
+        <div class="s-card">
+          <div class="s-card-icon" style="background:linear-gradient(135deg,#f44336,#e91e63)">
+            <span class="icon-emoji">❌</span><i class="icon-fa fa-solid fa-times-circle"></i>
+          </div>
+          <div class="s-card-body">
+            <div class="s-card-number" id="tsNumErrors">-</div>
+            <div class="s-card-label">失败</div>
+          </div>
+        </div>
+        <div class="s-card">
+          <div class="s-card-icon" style="background:linear-gradient(135deg,#00bcd4,#4dd0e1)">
+            <span class="icon-emoji">🔤</span><i class="icon-fa fa-solid fa-font"></i>
+          </div>
+          <div class="s-card-body">
+            <div class="s-card-number" id="tsNumTokens">-</div>
+            <div class="s-card-label">总消耗 tokens</div>
+          </div>
+        </div>
+        <div class="s-card">
+          <div class="s-card-icon" style="background:linear-gradient(135deg,#7c4dff,#b388ff)">
+            <span class="icon-emoji">💰</span><i class="icon-fa fa-solid fa-coins"></i>
+          </div>
+          <div class="s-card-body">
+            <div class="s-card-number" id="tsNumTotalCost">¥0</div>
+            <div class="s-card-label">总花费</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 排行表 -->
+      <div class="stats-table-wrap">
+        <div class="stats-table-header">
+          <h3 style="margin:0;font-size:14px">工具调用排行</h3>
+          <span style="font-size:12px;color:var(--text-secondary)" id="toolsStatsPeriod"></span>
+        </div>
+        <div class="stats-table-scroll" style="max-height:400px">
+          <table class="stats-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>工具名</th>
+                <th class="num">调用</th>
+                <th class="num">成功</th>
+                <th class="num">失败</th>
+                <th class="num">平均耗时(ms)</th>
+                <th class="num">输入 tokens</th>
+                <th class="num">输出 tokens</th>
+                <th class="num">缓存 tokens</th>
+                <th class="num">花费</th>
+              </tr>
+            </thead>
+            <tbody id="toolsTableBody"></tbody>
+          </table>
+        </div>
+        <div class="stats-empty" id="toolsEmpty" style="display:none">
+          <p>暂无工具调用记录</p>
+          <p class="stats-empty-hint">使用工具后，统计数据会自动记录</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<link rel="stylesheet" href="/static/css/style.css?v=VERSION">
+
+<!-- ===== 调试面板 ===== -->
+<div class="debug-drawer" id="debugDrawer">
+  <div class="dd-header">
+    <h3>🔧 开发者调试</h3>
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-sm btn-outline" onclick="clearDebugEvents()" style="font-size:11px;padding:2px 10px">清空</button>
+      <button class="btn btn-sm btn-outline" onclick="refreshDebugLogs()" style="font-size:11px;padding:2px 10px">刷新日志</button>
+      <span style="cursor:pointer;font-size:16px;color:#8890a4;font-family:var(--font)" onclick="toggleDebug()">
+        <span class="icon-emoji">✕</span>
+        <i class="icon-fa fa-solid fa-xmark"></i>
+      </span>
+    </div>
+  </div>
+  <div class="dd-tabs">
+    <div class="dd-tab active" data-dtab="events" onclick="switchDebugTab('events')">📋 事件流</div>
+    <div class="dd-tab" data-dtab="tools" onclick="switchDebugTab('tools')">🔧 工具调用</div>
+    <div class="dd-tab" data-dtab="logs" onclick="switchDebugTab('logs')">📝 日志</div>
+    <div class="dd-tab" data-dtab="raw" onclick="switchDebugTab('raw')">{ } Raw JSON</div>
+  </div>
+  <div class="dd-body" id="ddBody"><div class="dd-empty">等待对话事件...</div></div>
+  <div class="dd-bar" id="ddBar">事件: 0 | 工具调用: 0 | 等待中...</div>
+</div>
+
+<!-- Toast 容器 -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script src="/static/js/core.js?v=VERSION"></script>
+<script src="/static/js/chat.js?v=VERSION"></script>
+<script src="/static/js/pages.js?v=VERSION"></script>
+<script src="/static/js/init.js?v=VERSION"></script>
+
+<script src="/static/js/history.js?v=VERSION"></script>
+
+<!-- ===== 调试面板 JS ===== -->
+<script src="/static/js/debug.js?v=VERSION"></script>
+<div class="ctx-menu" id="ctxMenu"></div>
+</body>
+</html>

@@ -1,0 +1,7 @@
+date,product,amount,region,customer_type
+2024-07-08,Widget A,165.00,North,retail
+2024-07-18,Widget B,245.25,South,wholesale
+2024-08-03,Widget E,500.00,East,retail
+2024-08-23,Widget C,350.75,West,wholesale
+2024-09-05,Widget A,170.50,North,retail
+2024-09-25,Widget B,280.00,South,wholesale

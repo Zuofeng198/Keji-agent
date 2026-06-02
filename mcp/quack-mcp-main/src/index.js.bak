@@ -1,0 +1,106 @@
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
+import Database from 'duckdb';
+import fs from 'fs';
+import path from 'path';
+
+const server = new Server(
+  { name: 'quack-mcp', version: '1.0.0' },
+  { capabilities: { tools: {} } }
+);
+
+const db = new Database.Database(':memory:');
+const loadedTables = new Map();
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    {
+      name: 'load_csv',
+      description: 'Load a CSV file into DuckDB for analysis',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          file_path: { type: 'string', description: 'Path to the CSV file' },
+          table_name: { type: 'string', description: 'Table name (optional)' },
+        },
+        required: ['file_path'],
+      },
+    },
+    {
+      name: 'query_csv',
+      description: 'Execute SQL query on loaded CSV data',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'SQL query to execute' },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'list_tables',
+      description: 'List all loaded tables',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'describe_table',
+      description: 'Get table schema',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          table_name: { type: 'string', description: 'Table name' },
+        },
+        required: ['table_name'],
+      },
+    },
+  ],
+}));
+
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+
+  try {
+    if (name === 'load_csv') {
+      const filePath = path.resolve(args.file_path);
+      const tableName = args.table_name || path.basename(filePath, '.csv').replace(/[^a-zA-Z0-9_]/g, '_');
+      const sql = `CREATE OR REPLACE TABLE "${tableName}" AS SELECT * FROM read_csv_auto('${filePath.replace(/\\/g, '\\\\')}')`;
+      await new Promise((resolve, reject) => {
+        db.run(sql, (err) => err ? reject(err) : resolve());
+      });
+      loadedTables.set(tableName, filePath);
+      return { content: [{ type: 'text', text: `Loaded ${filePath} as table "${tableName}"` }] };
+    }
+
+    if (name === 'query_csv') {
+      const rows = await new Promise((resolve, reject) => {
+        db.all(args.query, (err, res) => err ? reject(err) : resolve(res));
+      });
+      const text = rows.length === 0 ? '(empty result)' : JSON.stringify(rows, (key, val) =>
+        typeof val === 'bigint' ? Number(val) : val, 2).slice(0, 8000);
+      return { content: [{ type: 'text', text }] };
+    }
+
+    if (name === 'list_tables') {
+      const tables = [...loadedTables.keys()];
+      return { content: [{ type: 'text', text: tables.length ? tables.join('\n') : 'No tables loaded' }] };
+    }
+
+    if (name === 'describe_table') {
+      const rows = await new Promise((resolve, reject) => {
+        db.all(`DESCRIBE "${args.table_name}"`, (err, res) => err ? reject(err) : resolve(res));
+      });
+      return { content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] };
+    }
+
+    throw new Error(`Unknown tool: ${name}`);
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true };
+  }
+});
+
+const transport = new StdioServerTransport();
+await server.connect(transport);

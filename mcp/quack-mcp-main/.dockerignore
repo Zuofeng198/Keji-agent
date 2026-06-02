@@ -1,0 +1,11 @@
+# Ignore everything by default
+*
+
+# Include essential files for the application
+!package.json
+!package-lock.json
+!src/
+!tsconfig.json
+
+# Include data directory for sample CSV files
+!data/

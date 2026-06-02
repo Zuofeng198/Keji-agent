@@ -1,0 +1,5 @@
+product_id,product_name,quantity,price,location
+P001,Widget A,85,15.99,Warehouse A
+P002,Widget B,92,22.50,Warehouse B
+P003,Widget C,45,35.00,Warehouse A
+P004,Widget D,60,42.75,Warehouse C
