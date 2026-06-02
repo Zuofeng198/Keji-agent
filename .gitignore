@@ -22,8 +22,7 @@ logs/
 .memdb/
 .deepseek/
 
-# Offline deploy bundles (large; copy manually to target PCs)
-offline_packages/
+# Offline deploy (venv copy only; wheels are in Git LFS under offline_packages/)
 portable_bundle/
 
 # Build artifacts

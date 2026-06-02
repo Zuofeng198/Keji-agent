@@ -16,13 +16,13 @@
 |------|------|
 | 系统 | Windows 10/11（64 位） |
 | Python | **3.10 或 3.11、3.12**（64 位）均可运行源码 |
-| 离线 wheel | **必须与打 wheel 时的 Python 主版本一致**（见下） |
+| 离线 wheel | 仓库已含 **Python 3.12** wheel（Git LFS），见下 |
 | Node.js | 可选 18+，完整 MCP 建议安装 |
 
 ### 关于 Python 3.10 / 3.12
 
 - 从 GitHub **在线部署**：`setup_deploy.bat` 会用你本机已装的 Python（3.10～3.12 均可）联网安装依赖。
-- **离线 wheel 包**（`offline_packages/pip_wheels`）是按 **打包容器的 Python 版本**编译的。当前若用开发机 `venv` 为 **3.10** 打的包，在 **3.12** 上不能混用，需在 **3.12** 下重新执行 `package_wheels.bat`，或目标机不用离线包、改在线安装。
+- **离线 wheel** 在 `offline_packages/pip_wheels/`（**Git LFS**，约 400MB）。当前包为 **Python 3.12 / Windows 64 位**（见 `offline_packages/BUILD_INFO.txt`）。克隆后需执行：`git lfs pull`
 
 ## 快速开始（Windows）
 
@@ -31,6 +31,7 @@
 ```powershell
 git clone https://github.com/Zuofeng198/keji.git
 cd keji
+git lfs pull
 ```
 
 ### 2. 一键部署
@@ -75,16 +76,9 @@ KEJI_ADMIN_PASSWORD=首次管理员密码
 
 ## 离线部署（可选）
 
-在**能正常跑起来的一台机器**上：
+克隆仓库后若已执行 `git lfs pull`，则已包含 `offline_packages/`，目标机直接 **`setup_deploy.bat`** 即可离线安装。
 
-```text
-package_wheels.bat   → 生成 offline_packages/pip_wheels
-```
-
-将整个项目（含 `offline_packages`）拷到目标机，再运行 `setup_deploy.bat`。  
-详见 [docs/离线部署.md](docs/离线部署.md)。
-
-> 离线包体积大（约 400MB），**未纳入 Git 仓库**；请本地打包或 U 盘拷贝。
+若要自行重打 wheel（例如换 Python 版本）：运行 `package_wheels.bat`。详见 [docs/离线部署.md](docs/离线部署.md)。
 
 ## 配置说明
 
@@ -115,7 +109,7 @@ docs/           部署与排错文档
 
 - `venv/`、`node_modules/`
 - `config.yaml`、`.env`
-- `data/`、`logs/`、`offline_packages/`
+- `data/`、`logs/`（运行后本地生成）
 
 ## 许可证
 

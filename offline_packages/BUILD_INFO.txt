@@ -1,0 +1,4 @@
+﻿python_version=3.12.10
+platform=AMD64
+built_on=ZUOFENG
+built_at=2026-06-02 18:36:58
