@@ -2,7 +2,7 @@
 cd /d "%~dp0"
 
 if not exist "venv\Scripts\python.exe" (
-    echo [ERROR] venv not found. Run setup_deploy.bat first.
+    echo [ERROR] venv not found. Run deploy first: setup_deploy.bat
     pause
     exit /b 1
 )

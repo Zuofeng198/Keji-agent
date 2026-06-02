@@ -127,6 +127,19 @@ def _start_server(app):
     return thread, port
 
 
+def _log_launch_error(exc: BaseException) -> None:
+    try:
+        log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        path = os.path.join(log_dir, "launcher.log")
+        with open(path, "a", encoding="utf-8") as f:
+            import traceback
+            f.write(traceback.format_exc())
+            f.write("\n")
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="科吉 AI 助手")
     parser.add_argument(
@@ -143,7 +156,11 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if args.mode == "desktop":
-        start_desktop()
-    else:
-        start_server_only()
+    try:
+        if args.mode == "desktop":
+            start_desktop()
+        else:
+            start_server_only()
+    except Exception as e:
+        _log_launch_error(e)
+        raise

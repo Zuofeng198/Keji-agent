@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import uuid
@@ -53,13 +54,28 @@ async def lifespan(app: FastAPI):
         )
     else:
         logger.warning("API 鉴权未启用：请在 config.yaml 的 security 段配置")
-    adapter = await get_adapter()
-    # 启动飞书桥接层（如果配置了飞书渠道）
-    await adapter.start_feishu_bridge()
-    logger.info("科吉 AI 助手启动完成（nanobot 引擎）")
+
+    async def _init_engine() -> None:
+        await asyncio.sleep(0)  # 先让出，避免阻塞 lifespan 到达 yield
+        try:
+            ad = await get_adapter()
+            await ad.start_feishu_bridge()
+            logger.info("科吉 AI 助手启动完成（nanobot 引擎）")
+        except Exception as e:
+            logger.exception("后台引擎初始化失败: {}", e)
+
+    init_task = asyncio.create_task(_init_engine())
     yield
-    # 关闭飞书桥接层
-    await adapter.stop_feishu_bridge()
+    init_task.cancel()
+    try:
+        await init_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        ad = await get_adapter()
+        await ad.stop_feishu_bridge()
+    except Exception:
+        pass
 
 
 app = FastAPI(title="科吉 AI 助手", docs_url=None, redoc_url=None, lifespan=lifespan)
