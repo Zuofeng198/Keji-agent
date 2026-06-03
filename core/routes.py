@@ -1903,14 +1903,133 @@ def _calc_cost(
     return round(cost, 6)
 
 
+def _assistant_usage_for_stats(
+    msgs: list,
+    idx: int,
+    msg: dict,
+    provider,
+    model: str,
+    *,
+    allow_estimate: bool = True,
+) -> dict[str, int]:
+    """从 assistant 消息读取 usage；仅在 allow_estimate 时对缺失项做 tiktoken 估算。"""
+    from nanobot.adapter import _ensure_usage
+
+    u = msg.get("usage") or {}
+    pt = int(u.get("prompt_tokens", 0) or 0)
+    ct = int(u.get("completion_tokens", 0) or 0)
+    cached = int(u.get("cached_tokens", 0) or 0)
+    src = u.get("source", "")
+    if pt or ct:
+        tt = int(u.get("total_tokens", 0) or 0) or (pt + ct)
+        return {
+            "prompt_tokens": pt,
+            "completion_tokens": ct,
+            "total_tokens": tt,
+            "cached_tokens": cached,
+            "source": src or "api",
+        }
+
+    if not allow_estimate:
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cached_tokens": 0,
+            "source": "missing",
+        }
+
+    content = msg.get("content") or ""
+    thinking = msg.get("thinking") or msg.get("reasoning_content") or ""
+    if not content and not thinking:
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cached_tokens": 0,
+            "source": "missing",
+        }
+
+    tc_json = None
+    if msg.get("tool_calls"):
+        import json as _json
+        tc_json = _json.dumps(msg["tool_calls"], ensure_ascii=False)
+    est = _ensure_usage(
+        u if cached else None,
+        provider,
+        model,
+        msgs[: idx + 1],
+        None,
+        content,
+        reasoning_content=thinking or None,
+        tool_calls_json=tc_json,
+    )
+    return {
+        "prompt_tokens": int(est.get("prompt_tokens", 0) or 0),
+        "completion_tokens": int(est.get("completion_tokens", 0) or 0),
+        "total_tokens": int(est.get("total_tokens", 0) or 0),
+        "cached_tokens": int(est.get("cached_tokens", 0) or 0),
+        "source": "estimated",
+    }
+
+
+def _conv_tokens_from_messages(
+    msgs: list,
+    provider,
+    model: str,
+    *,
+    allow_estimate: bool,
+) -> dict:
+    """从 session 消息汇总 token；区分 api / estimated。"""
+    c_prompt = c_completion = c_cached = c_total = 0
+    sources: set[str] = set()
+    for idx, m in enumerate(msgs):
+        if m.get("role") != "assistant":
+            continue
+        if provider:
+            u = _assistant_usage_for_stats(
+                msgs, idx, m, provider, model, allow_estimate=allow_estimate,
+            )
+        elif isinstance(m.get("usage"), dict):
+            u = dict(m["usage"])
+            u.setdefault("source", "api")
+        else:
+            continue
+        c_prompt += u.get("prompt_tokens", 0) or 0
+        c_completion += u.get("completion_tokens", 0) or 0
+        c_total += u.get("total_tokens", 0) or 0
+        c_cached += u.get("cached_tokens", 0) or 0
+        sources.add(u.get("source") or "api")
+    if "estimated" in sources:
+        usage_source = "estimated" if sources <= {"estimated", "missing"} else "mixed"
+    elif c_prompt or c_completion:
+        usage_source = "api"
+    else:
+        usage_source = "missing"
+    return {
+        "prompt_tokens": c_prompt,
+        "completion_tokens": c_completion,
+        "total_tokens": c_total or (c_prompt + c_completion),
+        "cached_tokens": c_cached,
+        "usage_source": usage_source,
+    }
+
+
 @router.get("/stats/tokens")
 def get_token_stats():
     """聚合所有对话的 token 消耗统计（含费用估算）"""
     from nanobot.session.manager import SessionManager
+    from nanobot.adapter import _make_provider, load_config
+    from core.database.db import get_db
     from pathlib import Path
     sm = SessionManager(Path(__file__).resolve().parent.parent)
+    db = get_db()
 
     model_name, pricing = _get_model_pricing()
+    try:
+        provider_for_stats, stats_model, _ = _make_provider(load_config())
+    except Exception:
+        provider_for_stats, stats_model = None, model_name
 
     total = {"conversations": 0, "prompt_tokens": 0, "completion_tokens": 0,
              "total_tokens": 0, "cached_tokens": 0, "cost": 0.0}
@@ -1940,21 +2059,27 @@ def get_token_stats():
                     title = t[:50]
                     break
 
-        # 从 assistant 消息中提取 usage（含 cached_tokens）
-        c_prompt = 0
-        c_completion = 0
-        c_total = 0
-        c_cached = 0
-        for m in msgs:
-            if m.get("role") == "assistant" and "usage" in m:
-                u = m["usage"]
-                if isinstance(u, dict):
-                    c_prompt += u.get("prompt_tokens", 0) or 0
-                    c_completion += u.get("completion_tokens", 0) or 0
-                    c_total += u.get("total_tokens", 0) or 0
-                    c_cached += u.get("cached_tokens", 0) or 0
-
-        conv_cost = _calc_cost(c_prompt, c_completion, c_cached, pricing)
+        # 优先：数据库中每次 LLM API 调用的实测 usage（含系统提示、历史、工具定义）
+        db_u = db.get_session_llm_usage(key)
+        if db_u.get("llm_calls", 0) > 0:
+            c_prompt = db_u["prompt_tokens"]
+            c_completion = db_u["completion_tokens"]
+            c_cached = db_u["cached_tokens"]
+            c_total = db_u.get("total_tokens") or (c_prompt + c_completion)
+            usage_source = "api"
+            conv_cost = _calc_cost(c_prompt, c_completion, c_cached, pricing)
+            if db_u.get("cost"):
+                conv_cost = db_u["cost"]
+        else:
+            file_u = _conv_tokens_from_messages(
+                msgs, provider_for_stats, stats_model, allow_estimate=True,
+            )
+            c_prompt = file_u["prompt_tokens"]
+            c_completion = file_u["completion_tokens"]
+            c_total = file_u["total_tokens"]
+            c_cached = file_u["cached_tokens"]
+            usage_source = file_u["usage_source"]
+            conv_cost = _calc_cost(c_prompt, c_completion, c_cached, pricing)
 
         convs.append({
             "id": key,
@@ -1966,6 +2091,7 @@ def get_token_stats():
             "cached_tokens": c_cached,
             "cost": conv_cost,
             "message_count": len(msgs),
+            "usage_source": usage_source,
         })
 
         total["conversations"] += 1
@@ -2115,60 +2241,6 @@ async def set_active_skills(req: dict):
 # ═══════════════════════════════════════════════════════
 # 工具调用统计
 # ═══════════════════════════════════════════════════════
-
-
-@router.get("/stats/tokens")
-def token_stats():
-    """获取会话 token 消耗概览（按天聚合）"""
-    import json as _json
-    from nanobot.adapter import load_config
-    config = load_config()
-    default_model = config.get("models", {}).get("default", "deepseek")
-    model_name = config.get("models", {}).get(default_model, {}).get("model", "deepseek-v4-flash")
-    is_local = default_model == "ollama"
-
-    sessions_dir = os.path.join(os.path.dirname(__file__), "..", "sessions")
-    convs = []
-    if os.path.isdir(sessions_dir):
-        for fn in sorted(os.listdir(sessions_dir)):
-            if not fn.endswith(".jsonl"):
-                continue
-            fp = os.path.join(sessions_dir, fn)
-            try:
-                with open(fp, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        msg = _json.loads(line)
-                        usage = msg.get("usage") or {}
-                        timestamp = msg.get("timestamp", "")
-                        date = timestamp[:10] if len(timestamp) >= 10 else ""
-                        convs.append({
-                            "date": date,
-                            "prompt_tokens": usage.get("prompt_tokens", 0),
-                            "completion_tokens": usage.get("completion_tokens", 0),
-                            "total_tokens": usage.get("total_tokens", usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)),
-                            "cached_tokens": usage.get("cached_tokens", 0),
-                            "cost": usage.get("cost", 0),
-                        })
-            except Exception:
-                pass
-
-    # 从 database 补充 cost 数据
-    try:
-        from core.database.db import get_db
-        db = get_db()
-        cost_sum = db.get_cost_summary()
-    except Exception:
-        cost_sum = {"all": {"cost": 0}}
-
-    return {
-        "conversations": convs,
-        "is_local": is_local,
-        "model": model_name,
-        "total_cost": cost_sum.get("all", {}).get("cost", 0),
-    }
 
 
 @router.get("/stats/tools")

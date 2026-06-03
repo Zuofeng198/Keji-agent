@@ -321,6 +321,7 @@ class AgentRunner:
             context.usage = dict(raw_usage)
             context.tool_calls = list(response.tool_calls)
             self._accumulate_usage(usage, raw_usage)
+            self._report_llm_usage(spec, raw_usage)
 
             if response.should_execute_tools:
                 tool_calls = list(response.tool_calls)
@@ -479,6 +480,7 @@ class AgentRunner:
                 response = await self._request_finalization_retry(spec, messages_for_model)
                 retry_usage = self._usage_dict(response.usage)
                 self._accumulate_usage(usage, retry_usage)
+                self._report_llm_usage(spec, retry_usage)
                 raw_usage = self._merge_usage(raw_usage, retry_usage)
                 context.response = response
                 context.usage = dict(raw_usage)
@@ -1050,6 +1052,36 @@ class AgentRunner:
         if messages and messages[-1].get("role") == "assistant" and not messages[-1].get("tool_calls"):
             return
         messages.append(build_assistant_message(_PERSISTED_MODEL_ERROR_PLACEHOLDER))
+
+    @staticmethod
+    def _report_llm_usage(spec: AgentRunSpec, usage: dict[str, int]) -> None:
+        """每次 LLM API 返回 usage 时写入统计（DeepSeek 计费口径，含系统提示与上下文）。"""
+        cb = spec.cost_callback
+        if cb is None or not usage:
+            return
+        pt = int(usage.get("prompt_tokens", 0) or 0)
+        ct = int(usage.get("completion_tokens", 0) or 0)
+        cached = int(usage.get("cached_tokens", 0) or 0)
+        if not pt and not ct:
+            return
+        import asyncio as _asyncio
+        if not _asyncio.iscoroutinefunction(cb):
+            return
+        try:
+            _asyncio.create_task(cb(
+                tool_name="__llm__",
+                status="ok",
+                duration_ms=0,
+                prompt_tokens=pt,
+                completion_tokens=ct,
+                cached_tokens=cached,
+                estimated_cost=0.0,
+                model=spec.model,
+                session_key=spec.session_key or "",
+                turn_id=str(getattr(spec, "_current_iteration", "")),
+            ))
+        except Exception:
+            pass
 
     @staticmethod
     def _report_tool_cost(

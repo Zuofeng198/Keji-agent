@@ -737,6 +737,31 @@ class Database:
             "totals": dict(totals) if totals else {},
         }
 
+    def get_session_llm_usage(self, session_id: str) -> dict:
+        """按会话汇总 LLM API 实测 token（每次模型调用的 usage 累加）。"""
+        conn = self._get_conn()
+        row = conn.execute(
+            """SELECT COUNT(*) as llm_calls,
+                      COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                      COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+                      COALESCE(SUM(cached_tokens), 0) as cached_tokens,
+                      COALESCE(SUM(estimated_cost), 0) as cost
+               FROM tool_usage_log
+               WHERE session_id = ? AND tool_name = '__llm__'""",
+            (session_id,),
+        ).fetchone()
+        if not row:
+            return {
+                "llm_calls": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cached_tokens": 0,
+                "cost": 0.0,
+            }
+        d = dict(row)
+        d["total_tokens"] = d["prompt_tokens"] + d["completion_tokens"]
+        return d
+
     def get_cost_summary(self) -> dict:
         """获取今日、本月、全部的成本汇总"""
         conn = self._get_conn()

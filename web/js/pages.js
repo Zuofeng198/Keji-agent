@@ -1484,7 +1484,7 @@ function renderStatsTable(convs) {
     var c = sorted[i];
     var title = (c.title || '新对话').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     var dateStr = (c.date || '').slice(0, 16).replace('T', ' ');
-    var costStr = '';
+    costStr = '';
     if (isLocal) {
       costStr = '免费';
     } else if (c.cost == null || c.cost === 0) {
@@ -1494,9 +1494,12 @@ function renderStatsTable(convs) {
     } else {
       costStr = '¥' + c.cost.toFixed(2);
     }
+    var srcHint = '';
+    if (c.usage_source === 'estimated') srcHint = ' <span class="usage-tag est" title="tiktoken 估算，非 API 实测">估</span>';
+    else if (c.usage_source === 'api') srcHint = ' <span class="usage-tag api" title="DeepSeek API 返回的 usage，含系统提示与上下文">实测</span>';
     html += '<tr onclick="loadConversation(\'' + c.id + '\')">'
       + '<td>' + (i + 1) + '</td>'
-      + '<td class="conv-title" title="' + title + '">' + title + '</td>'
+      + '<td class="conv-title" title="' + title + '">' + title + srcHint + '</td>'
       + '<td>' + dateStr + '</td>'
       + '<td class="num">' + formatNumberFull(c.prompt_tokens) + '</td>'
       + '<td class="num">' + formatNumberFull(c.completion_tokens) + '</td>'

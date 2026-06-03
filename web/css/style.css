@@ -1830,6 +1830,18 @@ body {
 .stats-empty p { margin: 0 0 6px; font-size: 15px; color: var(--text); }
 .stats-empty-hint { font-size: 13px !important; color: var(--text-secondary) !important; opacity: .7; }
 
+.usage-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.usage-tag.api { background: #e8f5e9; color: #2e7d32; }
+.usage-tag.est { background: #fff3e0; color: #ef6c00; }
+
 /* --- theme-fa 覆盖 --- */
 .theme-fa .stats-table thead { background: var(--border-light); }
 

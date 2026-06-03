@@ -46,11 +46,24 @@ def persist_chat_turn(
         session = session_manager.get_or_create(session_key)
         session.add_message("user", query)
         if reply or thinking:
-            session.add_message(
-                "assistant",
-                reply,
-                thinking=thinking or None,
-            )
+            extra: dict = {}
+            if thinking:
+                extra["thinking"] = thinking
+            usage = getattr(run_result, "usage", None) or {}
+            if isinstance(usage, dict) and usage:
+                pt = int(usage.get("prompt_tokens", 0) or 0)
+                ct = int(usage.get("completion_tokens", 0) or 0)
+                if pt or ct or int(usage.get("cached_tokens", 0) or 0):
+                    tt = int(usage.get("total_tokens", 0) or 0) or (pt + ct)
+                    cached = int(usage.get("cached_tokens", 0) or 0)
+                    extra["usage"] = {
+                        "prompt_tokens": pt,
+                        "completion_tokens": ct,
+                        "total_tokens": tt,
+                        "cached_tokens": cached,
+                        "source": usage.get("source", "api"),
+                    }
+            session.add_message("assistant", reply, **extra)
         session_manager.save(session)
         sync_session_to_db(session_key, query, reply, thinking=thinking)
     except Exception as e:

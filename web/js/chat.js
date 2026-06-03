@@ -1265,7 +1265,12 @@ async function sendChat() {
               document.querySelectorAll('.phase-badge').forEach(e => e.remove());
               document.getElementById('stopBtn').style.display = 'none';
               if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
-              if (statusBar) { statusBar.textContent = '✅ 完成'; setTimeout(function(){statusBar.remove();statusBar=null;}, 2000); }
+              if (statusBar) {
+                statusBar.textContent = '✅ 完成';
+                setTimeout(function(){
+                  if (statusBar) { statusBar.remove(); statusBar = null; }
+                }, 2000);
+              }
               break;
           }
         } catch(e) {}

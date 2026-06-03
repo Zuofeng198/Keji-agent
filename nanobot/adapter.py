@@ -42,7 +42,10 @@ def _ensure_usage(
 ) -> dict[str, int]:
     """如果 provider 没返回真实 usage，用 estimate_prompt_tokens_chain 精确估算"""
     if usage and usage.get("prompt_tokens") and usage.get("completion_tokens"):
-        return usage
+        out = dict(usage)
+        out["source"] = "api"
+        return out
+    cached = int((usage or {}).get("cached_tokens", 0) or 0)
     pt, _ = estimate_prompt_tokens_chain(provider, model, messages, tools)
     try:
         import tiktoken
@@ -56,7 +59,10 @@ def _ensure_usage(
         ct = len(enc.encode(text_to_count))
     except Exception:
         ct = len(reply or "") // 4
-    return {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct}
+    result = {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct, "source": "estimated"}
+    if cached:
+        result["cached_tokens"] = cached
+    return result
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _SYSTEM_PROMPT_CACHE: str | None = None
@@ -182,29 +188,10 @@ class TranslatorProvider(LLMProvider):
             )
             async for chunk in stream:
                 if not chunk.choices:
-                    if hasattr(chunk, 'usage') and chunk.usage:
-                        u = chunk.usage
-                        usage = {
-                            "prompt_tokens": int(getattr(u, "prompt_tokens", 0) or 0),
-                            "completion_tokens": int(getattr(u, "completion_tokens", 0) or 0),
-                            "total_tokens": int(getattr(u, "total_tokens", 0) or 0),
-                            "cached_tokens": 0,
-                        }
-                        # 探测 cached_tokens（兼容各种 provider 的字段名）
-                        raw = getattr(u, "prompt_tokens_details", None)
-                        if raw is not None:
-                            if isinstance(raw, dict):
-                                usage["cached_tokens"] = int(raw.get("cached_tokens", 0) or 0)
-                            elif hasattr(raw, "cached_tokens"):
-                                usage["cached_tokens"] = int(raw.cached_tokens or 0)
-                        if not usage["cached_tokens"]:
-                            ct = getattr(u, "cached_tokens", None)
-                            if ct is not None:
-                                usage["cached_tokens"] = int(ct or 0)
-                        if not usage["cached_tokens"]:
-                            pcht = getattr(u, "prompt_cache_hit_tokens", None)
-                            if pcht is not None:
-                                usage["cached_tokens"] = int(pcht or 0)
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        extracted = OpenAICompatProvider._extract_usage(chunk.usage)
+                        if extracted:
+                            usage = extracted
                     continue
                 delta = chunk.choices[0].delta
                 fr = chunk.choices[0].finish_reason
@@ -1133,6 +1120,36 @@ class KejiAdapter:
             role=ctx.role,
         )
 
+    def _prepare_run_result_usage(self, run_result, *, thinking: str = "") -> None:
+        """补全 run_result.usage（流式未返回时估算，保留 cached_tokens）。"""
+        if not run_result:
+            return
+        reasoning = thinking or ""
+        tc_json = None
+        reply = run_result.final_content or ""
+        for m in reversed(run_result.messages or []):
+            if m.get("role") == "assistant":
+                if not reasoning:
+                    reasoning = m.get("reasoning_content") or m.get("thinking") or ""
+                if m.get("tool_calls"):
+                    import json as _j
+                    tc_json = _j.dumps(m["tool_calls"], ensure_ascii=False)
+                break
+        inner = getattr(self.provider, "_inner", self.provider)
+        original = dict(run_result.usage or {})
+        run_result.usage = _ensure_usage(
+            run_result.usage,
+            inner,
+            self.model,
+            run_result.messages or [],
+            None,
+            reply,
+            reasoning_content=reasoning or None,
+            tool_calls_json=tc_json,
+        )
+        if original.get("prompt_tokens") and original.get("completion_tokens"):
+            run_result.usage["source"] = "api"
+
     async def chat(self, query: str, sid: str = "", files: list[str] | None = None) -> str:
         sk_pre = sid or "cli:default"
         await self._prepare_session_for_chat(sk_pre)
@@ -1165,6 +1182,7 @@ class KejiAdapter:
                     _tc_json = _j.dumps(m["tool_calls"], ensure_ascii=False)
                 break
         from core.chat_persist import persist_chat_turn
+        self._prepare_run_result_usage(r)
         persist_chat_turn(self.session_manager, sk, query, r, thinking="")
         return reply
 
@@ -1219,6 +1237,7 @@ class KejiAdapter:
                         if hasattr(sse_hook, "thinking_content")
                         else ""
                     )
+                    self._prepare_run_result_usage(run_result, thinking=thinking)
                     persist_chat_turn(
                         self.session_manager, sk, query, run_result, thinking=thinking
                     )
