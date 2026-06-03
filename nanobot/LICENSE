@@ -1,15 +1,7 @@
 MIT License
 
-Copyright (c) 2026 Zuofeng198
+Copyright (c) 2025 nanobot contributors
 
-This license applies to Keji-specific portions of this repository (including
-`core/`, `web/`, `main.py`, deployment scripts, and related documentation).
-
-Portions of this software are derived from third-party open source projects,
-including nanobot (HKUDS/nanobot, MIT). See THIRD_PARTY_NOTICES.md for
-attributions and additional license terms.
-
----
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights

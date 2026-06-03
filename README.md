@@ -2,7 +2,9 @@
 
 Windows 上的**本地 / 局域网 AI 助手**：浏览器打开即可对话，支持多账号、团队共享文件夹、管理员后台。适合办公室内网一台服务器、多人通过网页访问。
 
-**仓库地址：** https://github.com/Zuofeng198/keji
+**Agent 引擎基于开源项目 [nanobot](https://github.com/HKUDS/nanobot)**（HKUDS，MIT 许可）。科吉在其上增加了 Web 前端、多用户权限、团队文件工作区与企业部署能力。详见 [第三方声明与致谢](THIRD_PARTY_NOTICES.md)。
+
+**仓库地址：** https://github.com/Zuofeng198/Keji-agent
 
 ## 界面预览
 
@@ -162,10 +164,12 @@ A：检查 Windows 防火墙是否放行 **8000** 端口；用服务器内网 IP
 
 ## 技术栈
 
-FastAPI · nanobot · SQLite 用户/会话 · JWT 鉴权 · 可选 MCP / Chroma 知识库
+FastAPI · **[nanobot](https://github.com/HKUDS/nanobot)**（HKUDS）· SQLite 用户/会话 · JWT 鉴权 · 可选 MCP / Chroma 知识库
 
-## 许可
+## 许可与第三方组件
 
-本项目采用 [MIT License](LICENSE)。
+- **科吉自有代码**（`core/`、`web/`、`main.py` 及部署脚本等）：[MIT License](LICENSE)
+- **nanobot 引擎**（`nanobot/`）：[MIT License](nanobot/LICENSE)，上游 [HKUDS/nanobot](https://github.com/HKUDS/nanobot)
+- **其他 bundled 组件与 pip 依赖**：见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 
 使用各 AI 模型 API（如 DeepSeek）及第三方依赖时，请遵守其各自的服务条款与许可。
